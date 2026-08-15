@@ -39,6 +39,7 @@ export default function App() {
             ? ` · 住院剩余 ${current.hospitalSkips}`
             : ""}
           {current.hasPlane ? " · 飞机" : ""}
+          {current.hasShip ? " · 轮船" : ""}
           {" · "}
           {state.winnerId
             ? "终局"
@@ -71,6 +72,7 @@ export default function App() {
                 <div className="ppos">
                   {state.tiles[p.position]?.zh ?? "—"}
                   {p.hasPlane ? " ✈" : ""}
+                  {p.hasShip ? " 🚢" : ""}
                 </div>
               </div>
             </div>
@@ -112,9 +114,13 @@ export default function App() {
                         : deed.special === "commerce"
                           ? "商"
                           : "旅"
-                      : deed.houses > 0
-                        ? String(deed.houses)
-                        : ""}
+                      : tile.kind === "facility"
+                        ? tile.zh === "石油"
+                          ? "油"
+                          : "矿"
+                        : deed.houses > 0
+                          ? String(deed.houses)
+                          : ""}
                   </div>
                 );
               })}
@@ -155,10 +161,17 @@ export default function App() {
 
           {humanTurn && prompt.kind === "buy" && buyTile && (
             <div className="panel choice">
-              <div className="label">无主地产</div>
+              <div className="label">
+                {buyTile.kind === "facility" ? "无主设施" : "无主地产"}
+              </div>
               <p>
                 购买 {buyTile.zh}？¥{buyTile.price}
                 {buyTile.rent != null ? ` · 租 ${buyTile.rent}` : ""}
+                {buyTile.zh === "石油"
+                  ? " · 付租减免"
+                  : buyTile.zh === "矿山"
+                    ? " · 加盖 −50"
+                    : ""}
               </p>
               <div className="actions">
                 <button
@@ -174,6 +187,63 @@ export default function App() {
                   onClick={() => session.declineBuy()}
                 >
                   不买
+                </button>
+              </div>
+            </div>
+          )}
+
+          {humanTurn && prompt.kind === "facilityOwn" && (
+            <div className="panel choice">
+              <div className="label">己方设施</div>
+              <p>
+                {state.tiles[prompt.tileIndex]?.zh} · 可半价 ¥500 退回 GM（不可拍卖）
+              </p>
+              <div className="actions">
+                <button type="button" onClick={() => session.sellFacility()}>
+                  半价退回
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => session.keepFacility()}
+                >
+                  保留
+                </button>
+              </div>
+            </div>
+          )}
+
+          {humanTurn && prompt.kind === "port" && (
+            <div className="panel choice">
+              <div className="label">大西洋港口</div>
+              <p>
+                出航至另一港口：船费 ¥400
+                {current.hasShip ? "（可用轮船 token 实付 200）" : ""}
+                。出航后本回合立即结束。
+              </p>
+              <div className="actions">
+                <button
+                  type="button"
+                  disabled={current.cash < 400}
+                  onClick={() => session.portSail(false)}
+                >
+                  出航 ¥400
+                </button>
+                {current.hasShip && (
+                  <button
+                    type="button"
+                    disabled={current.cash < 200}
+                    onClick={() => session.portSail(true)}
+                  >
+                    用轮船出航 ¥200
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => session.portStay()}
+                >
+                  停留
                 </button>
               </div>
             </div>
@@ -304,8 +374,8 @@ export default function App() {
             </ul>
           </div>
           <p className="hint">
-            已接入：买地 / 付租 / 加盖特性化 · 银行领薪 · 机场 · 医院 · 赌场。事件 /
-            港口 / 黑手党稍后。
+            已接入：买地 / 付租 / 加盖 · 石油矿山 · 港口出航 · 四角。事件 / 黑手党稍后。轮船
+            token 待事件牌发放。
           </p>
         </aside>
       </main>

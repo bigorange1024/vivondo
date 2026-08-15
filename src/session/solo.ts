@@ -11,8 +11,12 @@ import {
   declineUpgrade,
   endTurn,
   finishSettlement,
+  keepFacility,
+  portSail,
+  portStay,
   propertyTiles,
   rollDice,
+  sellFacility,
   type GameConfig,
   type GameState,
   type SpecialKind,
@@ -32,6 +36,10 @@ export interface GameSession {
   airportBeginFly(): void;
   airportFlyTo(tileIndex: number): void;
   cancelAirportDest(): void;
+  portStay(): void;
+  portSail(useShip: boolean): void;
+  sellFacility(): void;
+  keepFacility(): void;
   save?(): string;
   load?(raw: string): void;
 }
@@ -62,10 +70,8 @@ function aiResolveSettle(state: GameState): GameState {
     if (s.prompt.kind === "buy") {
       const tile = s.tiles[s.prompt.tileIndex]!;
       const price = tile.price ?? 0;
-      s =
-        player.cash >= price + 400
-          ? chooseBuy(s)
-          : declineBuy(s);
+      const reserve = tile.kind === "facility" ? 800 : 400;
+      s = player.cash >= price + reserve ? chooseBuy(s) : declineBuy(s);
       continue;
     }
 
@@ -75,6 +81,22 @@ function aiResolveSettle(state: GameState): GameState {
         s = chooseUpgrade(s, mode === "specialize" ? "industry" : undefined);
       } else {
         s = declineUpgrade(s);
+      }
+      continue;
+    }
+
+    if (s.prompt.kind === "facilityOwn") {
+      s = player.cash < 800 ? sellFacility(s) : keepFacility(s);
+      continue;
+    }
+
+    if (s.prompt.kind === "port") {
+      if (player.hasShip && player.cash >= 200) {
+        s = portSail(s, true);
+      } else if (player.cash >= 1000) {
+        s = portSail(s, false);
+      } else {
+        s = portStay(s);
       }
       continue;
     }
@@ -126,7 +148,9 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     state = rollDice(state);
     if (state.phase === "settle") {
       state = aiResolveSettle(state);
-      state = finishSettlement(state);
+      if (state.phase === "settle") {
+        state = finishSettlement(state);
+      }
     }
     if (state.phase === "end") {
       state = endTurn(state);
@@ -204,6 +228,22 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     },
     cancelAirportDest() {
       state = cancelAirportDest(state);
+      emit();
+    },
+    portStay() {
+      state = portStay(state);
+      emit();
+    },
+    portSail(useShip: boolean) {
+      state = portSail(state, useShip);
+      emit();
+    },
+    sellFacility() {
+      state = sellFacility(state);
+      emit();
+    },
+    keepFacility() {
+      state = keepFacility(state);
       emit();
     },
     save() {

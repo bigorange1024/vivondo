@@ -25,7 +25,9 @@ export type SettlePrompt =
       mode: "house" | "specialize";
     }
   | { kind: "airport" }
-  | { kind: "airportDest" };
+  | { kind: "airportDest" }
+  | { kind: "port" }
+  | { kind: "facilityOwn"; tileIndex: number };
 
 export interface PlayerState {
   id: string;
@@ -38,7 +40,13 @@ export interface PlayerState {
   /** Remaining forced skip-roll counts (R-042). */
   hospitalSkips: number;
   hasPlane: boolean;
+  /** Ship token (R-029); used at ports to cut fare by 200. */
+  hasShip: boolean;
 }
+
+const FACILITY_BUYBACK = 500;
+const PORT_FARE = 400;
+const PORT_SHIP_DISCOUNT = 200;
 
 export interface GameConfig {
   humans: number;
@@ -83,6 +91,7 @@ export function createInitialState(config: GameConfig): GameState {
       eliminated: false,
       hospitalSkips: 0,
       hasPlane: false,
+      hasShip: false,
     });
   }
   for (let i = 0; i < config.ais; i++) {
@@ -97,6 +106,7 @@ export function createInitialState(config: GameConfig): GameState {
       eliminated: false,
       hospitalSkips: 0,
       hasPlane: false,
+      hasShip: false,
     });
   }
 
@@ -264,8 +274,11 @@ function beginTileSettlement(state: GameState): GameState {
   if (tile.kind === "corner") {
     return settleCorner(state, tile);
   }
+  if (tile.kind === "port") {
+    return { ...state, prompt: { kind: "port" } };
+  }
 
-  // Event / mafia / port — stub for later
+  // Event / mafia — stub for later
   return pushLog(
     { ...state, prompt: { kind: "idle" } },
     `${tile.zh}：本阶段暂未结算（后续接入）`,
@@ -284,7 +297,13 @@ function settleOwnable(state: GameState, tile: BoardTile): GameState {
   }
 
   if (deed.ownerId === player.id) {
-    if (tile.kind === "facility" || deed.special != null) {
+    if (tile.kind === "facility") {
+      return {
+        ...state,
+        prompt: { kind: "facilityOwn", tileIndex: tile.index },
+      };
+    }
+    if (deed.special != null) {
       return pushLog(
         { ...state, prompt: { kind: "idle" } },
         `${player.name} 停在自己的 ${tile.zh}`,
@@ -328,7 +347,7 @@ function settleOwnable(state: GameState, tile: BoardTile): GameState {
     tile.index,
     tourismDice,
   );
-  let due = applyOilReduction(
+  const due = applyOilReduction(
     state.tiles,
     state.deeds,
     player.id,
@@ -339,6 +358,9 @@ function settleOwnable(state: GameState, tile: BoardTile): GameState {
   let s = state;
   if (deed.special === "tourism" && tourismDice != null) {
     s = pushLog(s, `旅游国掷骰 ${tourismDice} · 应收 ${receivable}`);
+  }
+  if (due !== receivable) {
+    s = pushLog(s, `石油减免：应收 ${receivable} → 实付 ${due}`);
   }
 
   if (due <= 0) {
@@ -473,7 +495,103 @@ export function chooseBuy(state: GameState): GameState {
     },
     prompt: { kind: "idle" },
   };
-  return pushLog(s, `${player.name} 购买 ${tile.zh}，花费 ${price}`);
+  const effect =
+    tile.zh === "石油"
+      ? " · 付租时可减免"
+      : tile.zh === "矿山"
+        ? " · 加盖费用 −50"
+        : "";
+  return pushLog(s, `${player.name} 购买 ${tile.zh}，花费 ${price}${effect}`);
+}
+
+/** R-027: sell oil/mine back to GM for half price. */
+export function sellFacility(state: GameState): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "facilityOwn") {
+    return state;
+  }
+  const { tileIndex } = state.prompt;
+  const tile = state.tiles[tileIndex]!;
+  const player = currentPlayer(state);
+  const deed = state.deeds[tileIndex];
+  if (!deed || deed.ownerId !== player.id || tile.kind !== "facility") {
+    return state;
+  }
+
+  let s = mapPlayer(state, state.currentPlayerIndex, {
+    cash: player.cash + FACILITY_BUYBACK,
+  });
+  s = {
+    ...s,
+    deeds: {
+      ...s.deeds,
+      [tileIndex]: { ownerId: null, houses: 0, special: null },
+    },
+    prompt: { kind: "idle" },
+  };
+  return pushLog(
+    s,
+    `${player.name} 将 ${tile.zh} 半价退回 GM，收回 ${FACILITY_BUYBACK}`,
+  );
+}
+
+export function keepFacility(state: GameState): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "facilityOwn") {
+    return state;
+  }
+  const tile = state.tiles[state.prompt.tileIndex]!;
+  return pushLog(
+    { ...state, prompt: { kind: "idle" } },
+    `${currentPlayer(state).name} 保留 ${tile.zh}`,
+  );
+}
+
+export function otherPortIndex(
+  state: GameState,
+  fromIndex: number,
+): number | null {
+  const other = state.tiles.find(
+    (t) => t.kind === "port" && t.index !== fromIndex,
+  );
+  return other?.index ?? null;
+}
+
+export function portStay(state: GameState): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "port") return state;
+  return pushLog(
+    { ...state, prompt: { kind: "idle" } },
+    `${currentPlayer(state).name} 停留港口，不出航`,
+  );
+}
+
+/** R-028: sail to the other Atlantic port; turn ends immediately. */
+export function portSail(state: GameState, useShip: boolean): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "port") return state;
+  const player = currentPlayer(state);
+  if (useShip && !player.hasShip) return state;
+
+  const fare = useShip ? PORT_FARE - PORT_SHIP_DISCOUNT : PORT_FARE;
+  if (player.cash < fare) {
+    return pushLog(
+      state,
+      `${player.name} 现金不足，无法出航（需 ${fare}）`,
+    );
+  }
+
+  const dest = otherPortIndex(state, player.position);
+  if (dest == null) return state;
+
+  let s = mapPlayer(state, state.currentPlayerIndex, {
+    cash: player.cash - fare,
+    position: dest,
+    hasShip: useShip ? false : player.hasShip,
+  });
+  const shipNote = useShip ? " · 使用轮船 token（−200）" : "";
+  s = pushLog(
+    s,
+    `${player.name} 出航至另一港口，船费 ${fare}${shipNote} · 本回合结束`,
+  );
+  // Anti-bounce: do not settle arrival port; end turn now.
+  return { ...s, phase: "end", prompt: { kind: "idle" } };
 }
 
 export function declineBuy(state: GameState): GameState {
