@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import boardUrl from "@assets/board-map-v7.png";
 import { BOARD_PNG, tileCenterPercent } from "./engine/board";
 import { CARD_ZH } from "./engine/deck";
-import { ownedPropertiesForCurrent, propertyTiles } from "./engine/game";
+import {
+  getAuctionView,
+  ownedPropertiesForCurrent,
+  ownedPropertiesForDebtor,
+  propertyTiles,
+} from "./engine/game";
 import { createSoloSession, type GameState } from "./session/solo";
 
 export default function App() {
@@ -12,10 +17,22 @@ export default function App() {
   useEffect(() => session.subscribe(setState), [session]);
 
   const current = state.players[state.currentPlayerIndex]!;
-  const humanTurn = current.kind === "human" && !state.winnerId;
-  const canRoll = humanTurn && state.phase === "roll";
+  const auctionView = getAuctionView(state);
+  const auctionActor = auctionView?.actorId
+    ? state.players.find((p) => p.id === auctionView.actorId)
+    : null;
+  const humanBidding =
+    !!auctionActor && auctionActor.kind === "human" && !state.winnerId;
+
+  const humanTurn =
+    (current.kind === "human" && !state.winnerId) || humanBidding;
+  const canRoll =
+    current.kind === "human" &&
+    !state.winnerId &&
+    state.phase === "roll";
   const canContinue =
-    humanTurn &&
+    current.kind === "human" &&
+    !state.winnerId &&
     ((state.phase === "settle" && state.prompt.kind === "idle") ||
       state.phase === "end");
 
@@ -37,6 +54,9 @@ export default function App() {
     ]
       .filter(Boolean)
       .join(" · ");
+
+  const auctionTile =
+    auctionView != null ? state.tiles[auctionView.auction.tileIndex] : null;
 
   return (
     <div className="app">
@@ -461,7 +481,7 @@ export default function App() {
 
           {humanTurn && prompt.kind === "forceAuctionPick" && (
             <div className="panel choice dest-list">
-              <div className="label">选择拍卖地产</div>
+              <div className="label">选择拍卖地产（E18）</div>
               <ul>
                 {ownedPropertiesForCurrent(state).map((t) => (
                   <li key={t.index}>
@@ -470,11 +490,84 @@ export default function App() {
                       className="dest-btn"
                       onClick={() => session.pickForceAuctionTile(t.index)}
                     >
-                      {t.zh} · 地价 {t.price}
+                      {t.zh} · 地价 {t.price} · 起拍 {(t.price ?? 0) * 2}
                     </button>
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {humanTurn && prompt.kind === "debtAuctionPick" && state.pendingDebt && (
+            <div className="panel choice dest-list">
+              <div className="label">筹资拍卖</div>
+              <p>
+                仍欠 {state.pendingDebt.reason} ¥{state.pendingDebt.amount}
+                ，必须拍卖国家地产。
+              </p>
+              <ul>
+                {ownedPropertiesForDebtor(state).map((t) => (
+                  <li key={t.index}>
+                    <button
+                      type="button"
+                      className="dest-btn"
+                      onClick={() => session.pickDebtAuctionTile(t.index)}
+                    >
+                      {t.zh} · 地价 {t.price} · 起拍 {(t.price ?? 0) * 2}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {prompt.kind === "auction" && auctionView && auctionTile && (
+            <div className="panel choice">
+              <div className="label">拍卖 · {auctionTile.zh}</div>
+              <p>
+                起拍 ¥{auctionView.auction.startPrice} · 一口价 ¥
+                {auctionView.auction.buyoutPrice}
+                {auctionView.auction.currentBid > 0
+                  ? ` · 当前 ¥${auctionView.auction.currentBid}`
+                  : " · 尚无有效出价"}
+              </p>
+              <p className="auction-turn">
+                当前出价方：{auctionActor?.name ?? "—"}
+                {humanBidding ? "（你）" : ""}
+              </p>
+              {humanBidding && (
+                <div className="actions">
+                  <button
+                    type="button"
+                    disabled={
+                      (auctionActor?.cash ?? 0) < auctionView.minBid
+                    }
+                    onClick={() => session.auctionBid()}
+                  >
+                    出价 ¥{auctionView.minBid}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      (auctionActor?.cash ?? 0) <
+                      auctionView.auction.buyoutPrice
+                    }
+                    onClick={() => session.auctionBuyout()}
+                  >
+                    一口价 ¥{auctionView.auction.buyoutPrice}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => session.auctionPass()}
+                  >
+                    不出 / 弃权
+                  </button>
+                </div>
+              )}
+              {!humanBidding && (
+                <p className="hint">等待其他玩家出价…</p>
+              )}
             </div>
           )}
 
@@ -533,8 +626,7 @@ export default function App() {
             </ul>
           </div>
           <p className="hint">
-            事件牌池 24 张已接入。黑手党跑马场仍为占位。E18
-            拍卖为简化自动竞价（起拍价成交）。
+            外环试玩 Demo：地产 / 角格 / 港口 / 设施 / 事件 / 拍卖已可玩。黑手党跑马场暂未开放。
           </p>
         </aside>
       </main>

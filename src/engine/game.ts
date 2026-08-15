@@ -13,6 +13,16 @@ import {
   type SpecialKind,
 } from "./deeds";
 import {
+  auctionBuyout as auctionBuyoutCore,
+  auctionPass as auctionPassCore,
+  auctionPlaceBid,
+  createAuction,
+  currentAuctionActor,
+  minNextBid,
+  syncAuctionCursor,
+  type AuctionState,
+} from "./auction";
+import {
   CARD_ZH,
   createEventDeck,
   discardEventCard,
@@ -45,7 +55,16 @@ export type SettlePrompt =
   | { kind: "portDispatch" }
   | { kind: "forceAuction" }
   | { kind: "forceAuctionPick" }
+  | { kind: "debtAuctionPick" }
+  | { kind: "auction" }
   | { kind: "swap" };
+
+export interface PendingDebt {
+  amount: number;
+  payeeId: string | null;
+  reason: string;
+  debtorId: string;
+}
 
 export interface PlayerState {
   id: string;
@@ -85,6 +104,8 @@ export interface GameState {
   casinoPool: number;
   eventDeck: EventDeckState;
   lastEvent: EventCardId | null;
+  auction: AuctionState | null;
+  pendingDebt: PendingDebt | null;
   turn: number;
   log: string[];
   winnerId: string | null;
@@ -156,8 +177,10 @@ export function createInitialState(config: GameConfig): GameState {
     casinoPool: 0,
     eventDeck: createEventDeck(),
     lastEvent: null,
+    auction: null,
+    pendingDebt: null,
     turn: 1,
-    log: ["对局开始 · Vivondo"],
+    log: ["对局开始 · Vivondo · 外环试玩（跑马场未开放）"],
     winnerId: null,
   };
 }
@@ -194,7 +217,7 @@ function findTileIndex(
   return state.tiles.findIndex(pred);
 }
 
-function payDebt(
+function payExact(
   state: GameState,
   payerIndex: number,
   amount: number,
@@ -230,6 +253,140 @@ function payDebt(
     );
   }
   return s;
+}
+
+function auctionableProperties(
+  state: GameState,
+  ownerId: string,
+): BoardTile[] {
+  return state.tiles.filter(
+    (t) =>
+      t.kind === "property" && state.deeds[t.index]?.ownerId === ownerId,
+  );
+}
+
+function demolishForCash(
+  state: GameState,
+  playerIndex: number,
+  need: number,
+): GameState {
+  let s = state;
+  let guard = 0;
+  while (s.players[playerIndex]!.cash < need && guard++ < 40) {
+    const player = s.players[playerIndex]!;
+    let best: BoardTile | null = null;
+    for (const t of auctionableProperties(s, player.id)) {
+      const d = s.deeds[t.index]!;
+      if (d.special != null || d.houses < 1) continue;
+      if (!best || d.houses > s.deeds[best.index]!.houses) best = t;
+    }
+    if (!best) break;
+    const deed = s.deeds[best.index]!;
+    const refund = Math.floor((best.price ?? 0) / 2);
+    s = {
+      ...s,
+      deeds: {
+        ...s.deeds,
+        [best.index]: { ...deed, houses: deed.houses - 1 },
+      },
+    };
+    s = mapPlayer(s, playerIndex, {
+      cash: s.players[playerIndex]!.cash + refund,
+    });
+    s = pushLog(
+      s,
+      `${player.name} 拆除 ${best.zh} 1 屋，GM 返还 ${refund}`,
+    );
+  }
+  return s;
+}
+
+function sellOilMineForCash(
+  state: GameState,
+  playerIndex: number,
+  need: number,
+): GameState {
+  let s = state;
+  const player = s.players[playerIndex]!;
+  if (player.cash >= need) return s;
+
+  for (const zh of ["石油", "矿山"] as const) {
+    if (s.players[playerIndex]!.cash >= need) break;
+    const tile = s.tiles.find(
+      (t) =>
+        t.kind === "facility" &&
+        t.zh === zh &&
+        s.deeds[t.index]?.ownerId === player.id,
+    );
+    if (!tile) continue;
+    s = {
+      ...s,
+      deeds: {
+        ...s.deeds,
+        [tile.index]: { ownerId: null, houses: 0, special: null },
+      },
+    };
+    s = mapPlayer(s, playerIndex, {
+      cash: s.players[playerIndex]!.cash + FACILITY_BUYBACK,
+    });
+    s = pushLog(
+      s,
+      `${player.name} 筹资将 ${zh} 半价退回 GM，收回 ${FACILITY_BUYBACK}`,
+    );
+  }
+  return s;
+}
+
+/** Pay debt with demolish → facility sell → auction → bankrupt (R-017). */
+function payDebt(
+  state: GameState,
+  payerIndex: number,
+  amount: number,
+  payeeId: string | null,
+  reason: string,
+): GameState {
+  if (amount <= 0) return state;
+  let s = state;
+  if (s.players[payerIndex]!.cash >= amount) {
+    return payExact(s, payerIndex, amount, payeeId, reason);
+  }
+
+  s = demolishForCash(s, payerIndex, amount);
+  if (s.players[payerIndex]!.cash >= amount) {
+    return payExact(s, payerIndex, amount, payeeId, reason);
+  }
+
+  s = sellOilMineForCash(s, payerIndex, amount);
+  if (s.players[payerIndex]!.cash >= amount) {
+    return payExact(s, payerIndex, amount, payeeId, reason);
+  }
+
+  const props = auctionableProperties(s, s.players[payerIndex]!.id);
+  if (props.length > 0) {
+    return {
+      ...s,
+      pendingDebt: {
+        amount,
+        payeeId,
+        reason,
+        debtorId: s.players[payerIndex]!.id,
+      },
+      prompt: { kind: "debtAuctionPick" },
+    };
+  }
+
+  return payExact(s, payerIndex, amount, payeeId, reason);
+}
+
+function resumePendingDebt(state: GameState): GameState {
+  const debt = state.pendingDebt;
+  if (!debt) return { ...state, prompt: { kind: "idle" } };
+  const debtorIndex = findPlayerIndex(state, debt.debtorId);
+  if (debtorIndex < 0) {
+    return { ...state, pendingDebt: null, prompt: { kind: "idle" } };
+  }
+  const s: GameState = { ...state, pendingDebt: null };
+  return payDebt(s, debtorIndex, debt.amount, debt.payeeId, debt.reason);
 }
 
 function gainCash(
@@ -770,75 +927,183 @@ function ownedCountryProperties(
   state: GameState,
   ownerId: string,
 ): BoardTile[] {
-  return state.tiles.filter(
-    (t) =>
-      t.kind === "property" && state.deeds[t.index]?.ownerId === ownerId,
-  );
+  return auctionableProperties(state, ownerId);
 }
 
-function runForceAuction(state: GameState, tileIndex: number): GameState {
+function startAuction(
+  state: GameState,
+  tileIndex: number,
+  source: "e18" | "debt",
+): GameState {
   const tile = state.tiles[tileIndex]!;
   const deed = state.deeds[tileIndex]!;
   const ownerId = deed.ownerId;
   if (!ownerId || tile.kind !== "property") return state;
 
-  const ownerIndex = findPlayerIndex(state, ownerId);
   const price = tile.price ?? 0;
   const start = price * 2;
-  let s = pushLog(
-    state,
-    `强制拍卖 ${tile.zh}（视为 0 屋普通地）· 起拍 ${start}`,
-  );
+  const bidderIds = state.players
+    .filter((p) => !p.eliminated && p.id !== ownerId && p.cash >= start)
+    .map((p) => p.id);
 
-  const bidders = s.players
-    .map((p, i) => ({ p, i }))
-    .filter(({ p }) => !p.eliminated && p.id !== ownerId && p.cash >= start)
-    .map(({ p, i }) => ({
-      i,
-      p,
-      roll: 2 + Math.floor(Math.random() * 6) + Math.floor(Math.random() * 6),
-    }))
-    .sort((a, b) => b.roll - a.roll);
+  // E18 / debt: reset to plain 0-house before auction listing
+  let s: GameState = {
+    ...state,
+    deeds: {
+      ...state.deeds,
+      [tileIndex]: { ownerId, houses: 0, special: null },
+    },
+  };
 
-  if (bidders.length === 0) {
-    const refund = Math.max(0, price - 50);
-    if (ownerIndex >= 0) {
-      s = mapPlayer(s, ownerIndex, {
-        cash: s.players[ownerIndex]!.cash + refund,
-      });
-    }
-    s = {
-      ...s,
-      deeds: {
-        ...s.deeds,
-        [tileIndex]: { ownerId: null, houses: 0, special: null },
-      },
-    };
-    return pushLog(
-      { ...s, prompt: { kind: "idle" } },
-      `${tile.zh} 流拍 · 原地主收回 ${refund}，地产归 GM 无主`,
-    );
+  if (bidderIds.length === 0) {
+    return finalizePassedIn(s, tileIndex, ownerId, price, source);
   }
 
-  const winner = bidders[0]!;
-  const sale = start;
-  const toOwner = Math.floor(sale / 2);
-  s = mapPlayer(s, winner.i, { cash: winner.p.cash - sale });
+  const auction = createAuction({
+    tileIndex,
+    sellerId: ownerId,
+    price,
+    bidderIds,
+    source,
+  });
+
+  const rollParts = auction.order.map((id) => {
+    const p = s.players[findPlayerIndex(s, id)]!;
+    return `${p.name}=${auction.rolls[id]}`;
+  });
+
+  s = pushLog(
+    s,
+    `拍卖开始：${tile.zh} · 起拍 ${auction.startPrice} · 一口价 ${auction.buyoutPrice} · 出价序 ${rollParts.join(" → ")}`,
+  );
+  return {
+    ...s,
+    auction: syncAuctionCursor(auction),
+    prompt: { kind: "auction" },
+  };
+}
+
+function finalizePassedIn(
+  state: GameState,
+  tileIndex: number,
+  ownerId: string,
+  price: number,
+  source: "e18" | "debt",
+): GameState {
+  const ownerIndex = findPlayerIndex(state, ownerId);
+  const refund = Math.max(0, price - 50);
+  let s = state;
   if (ownerIndex >= 0) {
     s = mapPlayer(s, ownerIndex, {
-      cash: s.players[ownerIndex]!.cash + toOwner,
+      cash: s.players[ownerIndex]!.cash + refund,
     });
   }
   s = {
     ...s,
     deeds: {
       ...s.deeds,
-      [tileIndex]: { ownerId: winner.p.id, houses: 0, special: null },
+      [tileIndex]: { ownerId: null, houses: 0, special: null },
     },
+    auction: null,
   };
-  return pushLog(
-    { ...s, prompt: { kind: "idle" } },
-    `${winner.p.name} 以 ${sale} 拍得 ${tile.zh}（掷 ${winner.roll}）· 原地主得 ${toOwner}`,
+  const tile = s.tiles[tileIndex]!;
+  s = pushLog(
+    s,
+    `${tile.zh} 流拍 · 原地主收回 ${refund}，地产归 GM 无主`,
+  );
+  if (source === "debt" || s.pendingDebt) {
+    return resumePendingDebt(s);
+  }
+  return { ...s, prompt: { kind: "idle" } };
+}
+
+function finalizeSold(
+  state: GameState,
+  auction: AuctionState,
+  buyerId: string,
+  salePrice: number,
+): GameState {
+  const tileIndex = auction.tileIndex;
+  const tile = state.tiles[tileIndex]!;
+  const sellerIndex = findPlayerIndex(state, auction.sellerId);
+  const buyerIndex = findPlayerIndex(state, buyerId);
+  if (buyerIndex < 0) return state;
+
+  const toOwner = Math.floor(salePrice / 2);
+  let s = mapPlayer(state, buyerIndex, {
+    cash: state.players[buyerIndex]!.cash - salePrice,
+  });
+  if (sellerIndex >= 0) {
+    s = mapPlayer(s, sellerIndex, {
+      cash: s.players[sellerIndex]!.cash + toOwner,
+    });
+  }
+  s = {
+    ...s,
+    deeds: {
+      ...s.deeds,
+      [tileIndex]: { ownerId: buyerId, houses: 0, special: null },
+    },
+    auction: null,
+  };
+  s = pushLog(
+    s,
+    `${s.players[buyerIndex]!.name} 以 ${salePrice} 拍得 ${tile.zh} · 原地主得 ${toOwner}（GM 收一半）`,
+  );
+
+  if (auction.source === "debt" || s.pendingDebt) {
+    return resumePendingDebt(s);
+  }
+  return { ...s, prompt: { kind: "idle" } };
+}
+
+function applyAuctionResult(
+  state: GameState,
+  result: ReturnType<typeof auctionPlaceBid>,
+): GameState {
+  if (result.type === "reject") {
+    return pushLog(state, result.reason);
+  }
+  if (result.type === "continue") {
+    const actorId = currentAuctionActor(result.auction);
+    const actor =
+      actorId != null
+        ? state.players[findPlayerIndex(state, actorId)]?.name
+        : "?";
+    let s: GameState = {
+      ...state,
+      auction: result.auction,
+      prompt: { kind: "auction" },
+    };
+    if (result.auction.currentBid > 0 && result.auction.highBidderId) {
+      const high =
+        state.players[findPlayerIndex(state, result.auction.highBidderId)]
+          ?.name ?? "?";
+      s = pushLog(
+        s,
+        `当前最高价 ${result.auction.currentBid}（${high}）· 下一位 ${actor}`,
+      );
+    } else {
+      s = pushLog(s, `等待出价 · 下一位 ${actor}`);
+    }
+    return s;
+  }
+  if (result.type === "sold") {
+    return finalizeSold(
+      { ...state, auction: result.auction },
+      result.auction,
+      result.buyerId,
+      result.salePrice,
+    );
+  }
+  // passedIn
+  const a = result.auction;
+  return finalizePassedIn(
+    { ...state, auction: null },
+    a.tileIndex,
+    a.sellerId,
+    a.facePrice,
+    a.source,
   );
 }
 
@@ -1217,7 +1482,92 @@ export function pickForceAuctionTile(
   ) {
     return state;
   }
-  return runForceAuction(state, tileIndex);
+  return startAuction(state, tileIndex, "e18");
+}
+
+export function pickDebtAuctionTile(
+  state: GameState,
+  tileIndex: number,
+): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "debtAuctionPick") {
+    return state;
+  }
+  const debt = state.pendingDebt;
+  if (!debt) return state;
+  const tile = state.tiles[tileIndex];
+  if (
+    !tile ||
+    tile.kind !== "property" ||
+    state.deeds[tileIndex]?.ownerId !== debt.debtorId
+  ) {
+    return state;
+  }
+  return startAuction(state, tileIndex, "debt");
+}
+
+export function auctionBid(state: GameState, amount?: number): GameState {
+  if (
+    state.phase !== "settle" ||
+    state.prompt.kind !== "auction" ||
+    !state.auction
+  ) {
+    return state;
+  }
+  const auction = syncAuctionCursor(state.auction);
+  const actorId = currentAuctionActor(auction);
+  if (!actorId) return state;
+  const actor = state.players[findPlayerIndex(state, actorId)]!;
+  const bid = amount ?? minNextBid(auction);
+  return applyAuctionResult(
+    state,
+    auctionPlaceBid(auction, actorId, bid, actor.cash),
+  );
+}
+
+export function auctionDoBuyout(state: GameState): GameState {
+  if (
+    state.phase !== "settle" ||
+    state.prompt.kind !== "auction" ||
+    !state.auction
+  ) {
+    return state;
+  }
+  const auction = syncAuctionCursor(state.auction);
+  const actorId = currentAuctionActor(auction);
+  if (!actorId) return state;
+  const actor = state.players[findPlayerIndex(state, actorId)]!;
+  return applyAuctionResult(
+    state,
+    auctionBuyoutCore(auction, actorId, actor.cash),
+  );
+}
+
+export function auctionDoPass(state: GameState): GameState {
+  if (
+    state.phase !== "settle" ||
+    state.prompt.kind !== "auction" ||
+    !state.auction
+  ) {
+    return state;
+  }
+  const auction = syncAuctionCursor(state.auction);
+  const actorId = currentAuctionActor(auction);
+  if (!actorId) return state;
+  return applyAuctionResult(state, auctionPassCore(auction, actorId));
+}
+
+export function getAuctionView(state: GameState): {
+  auction: AuctionState;
+  actorId: string | null;
+  minBid: number;
+} | null {
+  if (!state.auction || state.prompt.kind !== "auction") return null;
+  const auction = syncAuctionCursor(state.auction);
+  return {
+    auction,
+    actorId: currentAuctionActor(auction),
+    minBid: minNextBid(auction),
+  };
 }
 
 export function skipSwap(state: GameState): GameState {
@@ -1288,4 +1638,9 @@ export function ownedPropertiesForCurrent(state: GameState): BoardTile[] {
   return ownedCountryProperties(state, currentPlayer(state).id);
 }
 
-export type { SpecialKind, DeedState, EventCardId };
+export function ownedPropertiesForDebtor(state: GameState): BoardTile[] {
+  if (!state.pendingDebt) return [];
+  return ownedCountryProperties(state, state.pendingDebt.debtorId);
+}
+
+export type { SpecialKind, DeedState, EventCardId, AuctionState };

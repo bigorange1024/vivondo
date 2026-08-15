@@ -3,6 +3,9 @@ import {
   airportBeginFly,
   airportFlyTo,
   airportStay,
+  auctionBid,
+  auctionDoBuyout,
+  auctionDoPass,
   cancelAirportDest,
   cancelForceAuction,
   chooseBuy,
@@ -14,8 +17,11 @@ import {
   declineUpgrade,
   endTurn,
   finishSettlement,
+  getAuctionView,
   keepFacility,
   ownedPropertiesForCurrent,
+  ownedPropertiesForDebtor,
+  pickDebtAuctionTile,
   pickForceAuctionTile,
   portDispatchTakeCash,
   portDispatchTakeShip,
@@ -61,6 +67,10 @@ export interface GameSession {
   cancelForceAuction(): void;
   proceedForceAuction(): void;
   pickForceAuctionTile(tileIndex: number): void;
+  pickDebtAuctionTile(tileIndex: number): void;
+  auctionBid(amount?: number): void;
+  auctionBuyout(): void;
+  auctionPass(): void;
   skipSwap(): void;
   swapWith(otherId: string): void;
   save?(): string;
@@ -83,12 +93,38 @@ function aiPickAirportDest(state: GameState, free: boolean): number | null {
   return candidates[0]?.t.index ?? null;
 }
 
+function aiAuctionStep(state: GameState): GameState {
+  const view = getAuctionView(state);
+  if (!view?.actorId) return state;
+  const actor = state.players.find((p) => p.id === view.actorId);
+  if (!actor || actor.kind !== "ai") return state;
+
+  const { auction, minBid } = view;
+  if (actor.cash >= auction.buyoutPrice && actor.cash > auction.buyoutPrice + 800) {
+    return auctionDoBuyout(state);
+  }
+  if (actor.cash >= minBid + 300) {
+    return auctionBid(state, minBid);
+  }
+  return auctionDoPass(state);
+}
+
 function aiResolveSettle(state: GameState): GameState {
   let s = state;
   let guard = 0;
-  while (s.phase === "settle" && s.prompt.kind !== "idle" && guard < 30) {
+  while (s.phase === "settle" && s.prompt.kind !== "idle" && guard < 40) {
     guard += 1;
     const player = currentPlayer(s);
+
+    if (s.prompt.kind === "auction") {
+      const view = getAuctionView(s);
+      const actor = view?.actorId
+        ? s.players.find((p) => p.id === view.actorId)
+        : null;
+      if (!actor || actor.kind === "human") break;
+      s = aiAuctionStep(s);
+      continue;
+    }
 
     if (s.prompt.kind === "buy") {
       const tile = s.tiles[s.prompt.tileIndex]!;
@@ -153,9 +189,7 @@ function aiResolveSettle(state: GameState): GameState {
     }
 
     if (s.prompt.kind === "portDispatch") {
-      s = player.hasShip
-        ? portDispatchTakeCash(s)
-        : portDispatchTakeShip(s);
+      s = player.hasShip ? portDispatchTakeCash(s) : portDispatchTakeShip(s);
       continue;
     }
 
@@ -170,11 +204,17 @@ function aiResolveSettle(state: GameState): GameState {
       const props = ownedPropertiesForCurrent(s).sort(
         (a, b) => (a.price ?? 0) - (b.price ?? 0),
       );
-      if (!props[0]) {
-        s = { ...s, prompt: { kind: "idle" } };
-      } else {
-        s = pickForceAuctionTile(s, props[0].index);
-      }
+      if (!props[0]) s = { ...s, prompt: { kind: "idle" } };
+      else s = pickForceAuctionTile(s, props[0].index);
+      continue;
+    }
+
+    if (s.prompt.kind === "debtAuctionPick") {
+      const props = ownedPropertiesForDebtor(s).sort(
+        (a, b) => (a.price ?? 0) - (b.price ?? 0),
+      );
+      if (!props[0]) s = { ...s, prompt: { kind: "idle" }, pendingDebt: null };
+      else s = pickDebtAuctionTile(s, props[0].index);
       continue;
     }
 
@@ -201,6 +241,18 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     for (const l of listeners) l(state);
   };
 
+  const continueAiAuctionIfNeeded = () => {
+    if (state.prompt.kind !== "auction") return;
+    const view = getAuctionView(state);
+    const actor = view?.actorId
+      ? state.players.find((p) => p.id === view.actorId)
+      : null;
+    if (!actor || actor.kind !== "ai") return;
+    state = aiAuctionStep(state);
+    emit();
+    queueMicrotask(continueAiAuctionIfNeeded);
+  };
+
   const runAiIfNeeded = () => {
     if (state.winnerId) return;
     const p = state.players[state.currentPlayerIndex]!;
@@ -209,14 +261,21 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     state = rollDice(state);
     if (state.phase === "settle") {
       state = aiResolveSettle(state);
-      if (state.phase === "settle") {
+      if (state.phase === "settle" && state.prompt.kind === "idle") {
         state = finishSettlement(state);
       }
     }
+    emit();
+
+    if (state.prompt.kind === "auction") {
+      queueMicrotask(continueAiAuctionIfNeeded);
+      return;
+    }
+
     if (state.phase === "end") {
       state = endTurn(state);
+      emit();
     }
-    emit();
 
     queueMicrotask(() => {
       const n = state.players[state.currentPlayerIndex]!;
@@ -226,6 +285,23 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
         !n.eliminated &&
         state.phase === "roll"
       ) {
+        runAiIfNeeded();
+      }
+    });
+  };
+
+  const afterHumanAuction = () => {
+    emit();
+    queueMicrotask(() => {
+      if (state.prompt.kind === "auction") {
+        continueAiAuctionIfNeeded();
+        return;
+      }
+      if (state.phase === "settle" && state.prompt.kind === "idle") {
+        // wait for continue
+      }
+      const n = state.players[state.currentPlayerIndex]!;
+      if (n.kind === "ai" && state.phase === "roll") {
         runAiIfNeeded();
       }
     });
@@ -244,6 +320,9 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       if (p.kind !== "human" || state.phase !== "roll" || state.winnerId) return;
       state = rollDice(state);
       emit();
+      if (state.prompt.kind === "auction") {
+        queueMicrotask(continueAiAuctionIfNeeded);
+      }
     },
     continueTurn() {
       if (state.winnerId) return;
@@ -286,6 +365,9 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     airportFlyTo(tileIndex: number) {
       state = airportFlyTo(state, tileIndex);
       emit();
+      if (state.prompt.kind === "auction") {
+        queueMicrotask(continueAiAuctionIfNeeded);
+      }
     },
     cancelAirportDest() {
       state = cancelAirportDest(state);
@@ -322,6 +404,9 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     declineRentFree() {
       state = declineRentFree(state);
       emit();
+      if (state.prompt.kind === "debtAuctionPick" || state.prompt.kind === "auction") {
+        queueMicrotask(continueAiAuctionIfNeeded);
+      }
     },
     portDispatchTakeCash() {
       state = portDispatchTakeCash(state);
@@ -341,7 +426,23 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     },
     pickForceAuctionTile(tileIndex: number) {
       state = pickForceAuctionTile(state, tileIndex);
-      emit();
+      afterHumanAuction();
+    },
+    pickDebtAuctionTile(tileIndex: number) {
+      state = pickDebtAuctionTile(state, tileIndex);
+      afterHumanAuction();
+    },
+    auctionBid(amount?: number) {
+      state = auctionBid(state, amount);
+      afterHumanAuction();
+    },
+    auctionBuyout() {
+      state = auctionDoBuyout(state);
+      afterHumanAuction();
+    },
+    auctionPass() {
+      state = auctionDoPass(state);
+      afterHumanAuction();
     },
     skipSwap() {
       state = skipSwap(state);
