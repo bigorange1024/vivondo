@@ -116,24 +116,67 @@ function aiAuctionStep(state: GameState): GameState {
   if (actor.cash >= auction.buyoutPrice && actor.cash > auction.buyoutPrice + 800) {
     return auctionDoBuyout(state);
   }
-  if (actor.cash >= minBid + 300) {
+  if (actor.cash >= minBid) {
+    // Prefer pass if cash is tight after bidding start price
+    if (actor.cash < minBid + 200 && auction.currentBid > 0) {
+      return auctionDoPass(state);
+    }
     return auctionBid(state, minBid);
   }
   return auctionDoPass(state);
 }
 
+function settleKey(state: GameState): string {
+  const a = state.auction;
+  return [
+    state.prompt.kind,
+    a?.cursor,
+    a?.currentBid,
+    a?.highBidderId,
+    a?.activeIds.join(","),
+  ].join("|");
+}
+
 function aiResolveSettle(state: GameState): GameState {
   let s = state;
   let guard = 0;
-  while (s.phase === "settle" && s.prompt.kind !== "idle" && guard < 40) {
+  let lastKey = "";
+  let stuckHits = 0;
+  while (s.phase === "settle" && s.prompt.kind !== "idle" && guard < 50) {
     guard += 1;
+    const key = settleKey(s);
+    if (key === lastKey) {
+      stuckHits += 1;
+      if (stuckHits >= 3) {
+        s = {
+          ...s,
+          auction: null,
+          prompt: { kind: "idle" },
+          log: [`AI 结算卡住，已跳过（${s.prompt.kind}）`, ...s.log].slice(
+            0,
+            60,
+          ),
+        };
+        break;
+      }
+    } else {
+      stuckHits = 0;
+      lastKey = key;
+    }
     const player = currentPlayer(s);
 
     if (s.prompt.kind === "auction") {
       const view = getAuctionView(s);
-      const actor = view?.actorId
-        ? s.players.find((p) => p.id === view.actorId)
-        : null;
+      if (!view?.actorId) {
+        s = {
+          ...s,
+          auction: null,
+          prompt: { kind: "idle" },
+          log: ["拍卖无出价方，已结束", ...s.log].slice(0, 60),
+        };
+        continue;
+      }
+      const actor = s.players.find((p) => p.id === view.actorId);
       if (!actor || actor.kind === "human") break;
       s = aiAuctionStep(s);
       continue;
@@ -281,15 +324,61 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     for (const l of listeners) l(state);
   };
 
+  /** After AI settle becomes idle (e.g. auction done), close turn and chain. */
+  const finishAiSettleAndContinue = () => {
+    if (state.winnerId) return;
+    const cur = state.players[state.currentPlayerIndex]!;
+    if (cur.kind !== "ai" || cur.eliminated) return;
+
+    if (state.phase === "settle" && state.prompt.kind === "idle") {
+      state = finishSettlement(state);
+    }
+    if (state.phase === "end") {
+      state = endTurn(state);
+    }
+    emit();
+    queueMicrotask(runAiIfNeeded);
+  };
+
   const continueAiAuctionIfNeeded = () => {
-    if (state.prompt.kind !== "auction") return;
+    if (state.winnerId) return;
+
+    if (state.prompt.kind !== "auction") {
+      // Auction finished while AI was acting / after last bid
+      finishAiSettleAndContinue();
+      return;
+    }
+
     const view = getAuctionView(state);
     const actor = view?.actorId
       ? state.players.find((p) => p.id === view.actorId)
       : null;
-    if (!actor || actor.kind !== "ai") return;
+
+    if (!actor) {
+      state = {
+        ...state,
+        auction: null,
+        prompt: { kind: "idle" },
+        log: ["拍卖异常结束", ...state.log].slice(0, 60),
+      };
+      emit();
+      finishAiSettleAndContinue();
+      return;
+    }
+
+    if (actor.kind !== "ai") {
+      // Wait for human bid — UI handles it
+      return;
+    }
+
+    const before = settleKey(state);
     state = aiAuctionStep(state);
     emit();
+    if (settleKey(state) === before && state.prompt.kind === "auction") {
+      // No progress — force pass once more via engine, or abort
+      state = auctionDoPass(state);
+      emit();
+    }
     queueMicrotask(continueAiAuctionIfNeeded);
   };
 
@@ -297,6 +386,48 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     if (state.winnerId) return;
     const p = state.players[state.currentPlayerIndex]!;
     if (p.kind !== "ai" || p.eliminated) return;
+
+    // Resume mid-settle (e.g. after human auction bid ended)
+    if (state.phase === "settle") {
+      if (state.prompt.kind === "auction") {
+        queueMicrotask(continueAiAuctionIfNeeded);
+        return;
+      }
+      if (state.prompt.kind !== "idle") {
+        state = aiResolveSettle(state);
+        emit();
+        if (state.prompt.kind === "auction") {
+          queueMicrotask(continueAiAuctionIfNeeded);
+          return;
+        }
+        if (state.prompt.kind === "idle") {
+          finishAiSettleAndContinue();
+          return;
+        }
+        // Still blocked on human-only prompt during AI turn — abort
+        state = {
+          ...state,
+          auction: null,
+          prompt: { kind: "idle" },
+          log: [
+            `AI 回合无法处理「${state.prompt.kind}」，已跳过`,
+            ...state.log,
+          ].slice(0, 60),
+        };
+        emit();
+        finishAiSettleAndContinue();
+        return;
+      }
+      finishAiSettleAndContinue();
+      return;
+    }
+
+    if (state.phase === "end") {
+      state = endTurn(state);
+      emit();
+      queueMicrotask(runAiIfNeeded);
+      return;
+    }
 
     state = rollDice(state);
     if (state.phase === "settle") {
@@ -337,13 +468,12 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
         continueAiAuctionIfNeeded();
         return;
       }
-      if (state.phase === "settle" && state.prompt.kind === "idle") {
-        // wait for continue
+      const cur = state.players[state.currentPlayerIndex]!;
+      if (cur.kind === "ai") {
+        finishAiSettleAndContinue();
+        return;
       }
-      const n = state.players[state.currentPlayerIndex]!;
-      if (n.kind === "ai" && state.phase === "roll") {
-        runAiIfNeeded();
-      }
+      // Human's own turn — wait for Continue
     });
   };
 
@@ -373,6 +503,7 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
         emit();
         queueMicrotask(runAiIfNeeded);
       } else if (state.phase === "end") {
+        // Allow unsticking AI end-phase as well
         state = endTurn(state);
         emit();
         queueMicrotask(runAiIfNeeded);

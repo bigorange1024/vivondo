@@ -546,8 +546,8 @@ export default function App() {
           )}
 
           {prompt.kind === "auction" && auctionView && auctionTile && (
-            <div className="panel choice">
-              <div className="label">拍卖 · {auctionTile.zh}</div>
+            <div className="panel choice auction-panel">
+              <div className="label">拍卖进行中 · {auctionTile.zh}</div>
               <p>
                 起拍 ¥{auctionView.auction.startPrice} · 一口价 ¥
                 {auctionView.auction.buyoutPrice}
@@ -557,9 +557,9 @@ export default function App() {
               </p>
               <p className="auction-turn">
                 当前出价方：{auctionActor?.name ?? "—"}
-                {humanBidding ? "（你）" : ""}
+                {humanBidding ? "（请你出价）" : "（等待中）"}
               </p>
-              {humanBidding && (
+              {humanBidding ? (
                 <div className="actions">
                   <button
                     type="button"
@@ -588,12 +588,27 @@ export default function App() {
                     不出 / 弃权
                   </button>
                 </div>
-              )}
-              {!humanBidding && (
-                <p className="hint">等待其他玩家出价…</p>
+              ) : (
+                <p className="hint">AI 出价中，请稍候…</p>
               )}
             </div>
           )}
+
+          {current.kind === "ai" &&
+            state.phase === "settle" &&
+            prompt.kind === "idle" && (
+              <div className="panel choice">
+                <div className="label">AI 回合异常</div>
+                <p>若长时间无响应，可强制结束该 AI 回合。</p>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => session.continueTurn()}
+                >
+                  强制继续
+                </button>
+              </div>
+            )}
 
           {humanTurn && prompt.kind === "mafiaEnter" && (
             <div className="panel choice">
