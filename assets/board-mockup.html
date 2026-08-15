@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>棋盘效果图 v4</title>
+  <style>
+    :root {
+      --asia: #c62828;
+      --europe: #0d47a1;
+      --africa: #ef6c00;
+      --sa: #8e74c8;
+      --ca: #455a64;
+      --na: #81d4fa;
+      --oceania: #00a86b;
+      --event: #ff9800;
+      --tile: #f7f3ea;
+      --line: #cbbfa8;
+      --ink: #2a2a2a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 20% 20%, #f3e7d3 0%, transparent 40%),
+        radial-gradient(circle at 80% 80%, #e8d7c0 0%, transparent 45%),
+        #e4d3b8;
+    }
+    .wrap { width: min(920px, 96vw); }
+    h1 { margin: 0 0 8px; font-size: 1.15rem; font-weight: 700; }
+    .meta { margin: 0 0 16px; font-size: 0.85rem; opacity: 0.75; }
+    .board {
+      display: grid;
+      grid-template-columns: 1.15fr repeat(10, 1fr) 1.15fr;
+      grid-template-rows: 1.15fr repeat(10, 1fr) 1.15fr;
+      aspect-ratio: 1;
+      background: #d9c7a8;
+      border: 3px solid #8d7350;
+      box-shadow: 0 18px 40px rgba(60, 40, 20, 0.25);
+    }
+    .center {
+      grid-column: 2 / 12;
+      grid-row: 2 / 12;
+      background: linear-gradient(160deg, #eef6e8, #dcefd8);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      border: 1px solid #b7c9a8;
+    }
+    .center h2 { margin: 0; font-size: 1.1rem; }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      justify-content: center;
+      max-width: 85%;
+      font-size: 0.72rem;
+    }
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .swatch {
+      width: 14px;
+      height: 8px;
+      border-radius: 2px;
+      border: 1px solid rgba(0,0,0,.2);
+    }
+    .arrow { font-size: 0.8rem; opacity: 0.7; }
+    .tile {
+      background: var(--tile);
+      border: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      position: relative;
+    }
+    .bar { height: 18%; min-height: 6px; flex: 0 0 auto; }
+    .body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2px;
+      text-align: center;
+      gap: 1px;
+    }
+    .flag { font-size: clamp(0.7rem, 1.5vw, 1rem); line-height: 1; }
+    .name {
+      font-size: clamp(0.45rem, 1.05vw, 0.72rem);
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    .price {
+      font-size: clamp(0.35rem, 0.85vw, 0.58rem);
+      opacity: 0.8;
+      line-height: 1.1;
+    }
+    .event {
+      background: var(--event);
+      color: #fff;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: clamp(0.9rem, 2vw, 1.3rem);
+    }
+    .corner {
+      background: #ece7df;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: clamp(0.55rem, 1.2vw, 0.85rem);
+      font-weight: 700;
+      padding: 4px;
+    }
+    .start {
+      background: linear-gradient(145deg, #f6d365, #e8a838);
+      color: #4a2f00;
+    }
+    .start .sub { font-size: 0.65em; font-weight: 600; margin-top: 2px; }
+    /* grid placement helpers */
+    .c0 { grid-column: 12; grid-row: 12; }
+    .c3 { grid-column: 1; grid-row: 12; }
+    .c2 { grid-column: 1; grid-row: 1; }
+    .c1 { grid-column: 12; grid-row: 1; }
+    /* bottom: travel 起点→左 = col 11..2, row 12 */
+    .b1 { grid-column: 11; grid-row: 12; }
+    .b2 { grid-column: 10; grid-row: 12; }
+    .b3 { grid-column: 9; grid-row: 12; }
+    .b4 { grid-column: 8; grid-row: 12; }
+    .b5 { grid-column: 7; grid-row: 12; }
+    .b6 { grid-column: 6; grid-row: 12; }
+    .b7 { grid-column: 5; grid-row: 12; }
+    .b8 { grid-column: 4; grid-row: 12; }
+    .b9 { grid-column: 3; grid-row: 12; }
+    .b10 { grid-column: 2; grid-row: 12; }
+    /* left: travel 上 = row 11..2, col 1 */
+    .l1 { grid-column: 1; grid-row: 11; }
+    .l2 { grid-column: 1; grid-row: 10; }
+    .l3 { grid-column: 1; grid-row: 9; }
+    .l4 { grid-column: 1; grid-row: 8; }
+    .l5 { grid-column: 1; grid-row: 7; }
+    .l6 { grid-column: 1; grid-row: 6; }
+    .l7 { grid-column: 1; grid-row: 5; }
+    .l8 { grid-column: 1; grid-row: 4; }
+    .l9 { grid-column: 1; grid-row: 3; }
+    .l10 { grid-column: 1; grid-row: 2; }
+    /* top: travel 右 = col 2..11, row 1 */
+    .t1 { grid-column: 2; grid-row: 1; }
+    .t2 { grid-column: 3; grid-row: 1; }
+    .t3 { grid-column: 4; grid-row: 1; }
+    .t4 { grid-column: 5; grid-row: 1; }
+    .t5 { grid-column: 6; grid-row: 1; }
+    .t6 { grid-column: 7; grid-row: 1; }
+    .t7 { grid-column: 8; grid-row: 1; }
+    .t8 { grid-column: 9; grid-row: 1; }
+    .t9 { grid-column: 10; grid-row: 1; }
+    .t10 { grid-column: 11; grid-row: 1; }
+    /* right: travel 下 = row 2..11, col 12 */
+    .r1 { grid-column: 12; grid-row: 2; }
+    .r2 { grid-column: 12; grid-row: 3; }
+    .r3 { grid-column: 12; grid-row: 4; }
+    .r4 { grid-column: 12; grid-row: 5; }
+    .r5 { grid-column: 12; grid-row: 6; }
+    .r6 { grid-column: 12; grid-row: 7; }
+    .r7 { grid-column: 12; grid-row: 8; }
+    .r8 { grid-column: 12; grid-row: 9; }
+    .r9 { grid-column: 12; grid-row: 10; }
+    .r10 { grid-column: 12; grid-row: 11; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>棋盘效果图（每边中间 10 格 + 四角）</h1>
+    <p class="meta">顺序：亚→欧→非→南美→中美→北美→大洋洲 · 事件 4/3/4/3 · 仅顶部色条</p>
+    <div class="board" aria-label="游戏棋盘">
+      <div class="center">
+        <h2>中央区 / 骰子</h2>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--asia)"></i>亚</span>
+          <span><i class="swatch" style="background:var(--europe)"></i>欧</span>
+          <span><i class="swatch" style="background:var(--africa)"></i>非</span>
+          <span><i class="swatch" style="background:var(--sa)"></i>南美</span>
+          <span><i class="swatch" style="background:var(--ca)"></i>中美</span>
+          <span><i class="swatch" style="background:var(--na)"></i>北美</span>
+          <span><i class="swatch" style="background:var(--oceania)"></i>大洋</span>
+          <span><i class="swatch" style="background:var(--event)"></i>事件E</span>
+        </div>
+        <div class="arrow">从右下角起点顺时针 →</div>
+      </div>
+
+      <div class="tile corner start c0">起点<div class="sub">顺时针</div></div>
+      <div class="tile corner c3">角格<br/>待定</div>
+      <div class="tile corner c2">角格<br/>待定</div>
+      <div class="tile corner c1">角格<br/>待定</div>
+
+      <!-- 底边 10：E 日 中 E 印 伊朗 E 沙特 俄 E -->
+      <div class="tile event b1">E</div>
+      <div class="tile b2"><div class="bar" style="background:var(--asia)"></div><div class="body"><div class="flag">🇯🇵</div><div class="name">日本</div><div class="price">380/48</div></div></div>
+      <div class="tile b3"><div class="bar" style="background:var(--asia)"></div><div class="body"><div class="flag">🇨🇳</div><div class="name">中国</div><div class="price">420/55</div></div></div>
+      <div class="tile event b4">E</div>
+      <div class="tile b5"><div class="bar" style="background:var(--asia)"></div><div class="body"><div class="flag">🇮🇳</div><div class="name">印度</div><div class="price">360/45</div></div></div>
+      <div class="tile b6"><div class="bar" style="background:var(--asia)"></div><div class="body"><div class="flag">🇮🇷</div><div class="name">伊朗</div><div class="price">300/35</div></div></div>
+      <div class="tile event b7">E</div>
+      <div class="tile b8"><div class="bar" style="background:var(--asia)"></div><div class="body"><div class="flag">🇸🇦</div><div class="name">沙特</div><div class="price">340/40</div></div></div>
+      <div class="tile b9"><div class="bar" style="background:var(--europe)"></div><div class="body"><div class="flag">🇷🇺</div><div class="name">俄罗斯</div><div class="price">480/65</div></div></div>
+      <div class="tile event b10">E</div>
+
+      <!-- 左边 10：德 英 E 法 意 E 埃及 摩洛哥 E 尼日利亚 -->
+      <div class="tile l1"><div class="bar" style="background:var(--europe)"></div><div class="body"><div class="flag">🇩🇪</div><div class="name">德国</div><div class="price">500/68</div></div></div>
+      <div class="tile l2"><div class="bar" style="background:var(--europe)"></div><div class="body"><div class="flag">🇬🇧</div><div class="name">英国</div><div class="price">520/70</div></div></div>
+      <div class="tile event l3">E</div>
+      <div class="tile l4"><div class="bar" style="background:var(--europe)"></div><div class="body"><div class="flag">🇫🇷</div><div class="name">法国</div><div class="price">480/65</div></div></div>
+      <div class="tile l5"><div class="bar" style="background:var(--europe)"></div><div class="body"><div class="flag">🇮🇹</div><div class="name">意大利</div><div class="price">460/60</div></div></div>
+      <div class="tile event l6">E</div>
+      <div class="tile l7"><div class="bar" style="background:var(--africa)"></div><div class="body"><div class="flag">🇪🇬</div><div class="name">埃及</div><div class="price">160/18</div></div></div>
+      <div class="tile l8"><div class="bar" style="background:var(--africa)"></div><div class="body"><div class="flag">🇲🇦</div><div class="name">摩洛哥</div><div class="price">145/15</div></div></div>
+      <div class="tile event l9">E</div>
+      <div class="tile l10"><div class="bar" style="background:var(--africa)"></div><div class="body"><div class="flag">🇳🇬</div><div class="name">尼日利亚</div><div class="price">140/14</div></div></div>
+
+      <!-- 顶边 10：E 南非 阿根廷 E 智利 巴西 E 古巴 巴拿马 E -->
+      <div class="tile event t1">E</div>
+      <div class="tile t2"><div class="bar" style="background:var(--africa)"></div><div class="body"><div class="flag">🇿🇦</div><div class="name">南非</div><div class="price">150/16</div></div></div>
+      <div class="tile t3"><div class="bar" style="background:var(--sa)"></div><div class="body"><div class="flag">🇦🇷</div><div class="name">阿根廷</div><div class="price">240/28</div></div></div>
+      <div class="tile event t4">E</div>
+      <div class="tile t5"><div class="bar" style="background:var(--sa)"></div><div class="body"><div class="flag">🇨🇱</div><div class="name">智利</div><div class="price">220/26</div></div></div>
+      <div class="tile t6"><div class="bar" style="background:var(--sa)"></div><div class="body"><div class="flag">🇧🇷</div><div class="name">巴西</div><div class="price">260/32</div></div></div>
+      <div class="tile event t7">E</div>
+      <div class="tile t8"><div class="bar" style="background:var(--ca)"></div><div class="body"><div class="flag">🇨🇺</div><div class="name">古巴</div><div class="price">175/19</div></div></div>
+      <div class="tile t9"><div class="bar" style="background:var(--ca)"></div><div class="body"><div class="flag">🇵🇦</div><div class="name">巴拿马</div><div class="price">190/22</div></div></div>
+      <div class="tile event t10">E</div>
+
+      <!-- 右边 10：哥斯达黎加 墨 E 美 加 E 新西兰 澳 E 斐济 -->
+      <div class="tile r1"><div class="bar" style="background:var(--ca)"></div><div class="body"><div class="flag">🇨🇷</div><div class="name">哥斯达黎加</div><div class="price">180/20</div></div></div>
+      <div class="tile r2"><div class="bar" style="background:var(--na)"></div><div class="body"><div class="flag">🇲🇽</div><div class="name">墨西哥</div><div class="price">420/55</div></div></div>
+      <div class="tile event r3">E</div>
+      <div class="tile r4"><div class="bar" style="background:var(--na)"></div><div class="body"><div class="flag">🇺🇸</div><div class="name">美国</div><div class="price">560/80</div></div></div>
+      <div class="tile r5"><div class="bar" style="background:var(--na)"></div><div class="body"><div class="flag">🇨🇦</div><div class="name">加拿大</div><div class="price">500/70</div></div></div>
+      <div class="tile event r6">E</div>
+      <div class="tile r7"><div class="bar" style="background:var(--oceania)"></div><div class="body"><div class="flag">🇳🇿</div><div class="name">新西兰</div><div class="price">420/55</div></div></div>
+      <div class="tile r8"><div class="bar" style="background:var(--oceania)"></div><div class="body"><div class="flag">🇦🇺</div><div class="name">澳大利亚</div><div class="price">480/65</div></div></div>
+      <div class="tile event r9">E</div>
+      <div class="tile r10"><div class="bar" style="background:var(--oceania)"></div><div class="body"><div class="flag">🇫🇯</div><div class="name">斐济</div><div class="price">120/12</div></div></div>
+    </div>
+  </div>
+</body>
+</html>
