@@ -98,6 +98,12 @@ body {
   color: #667788;
 }
 
+.ptokens {
+  font-size: 0.72rem;
+  color: #4a6a4a;
+  margin-top: 2px;
+}
+
 .board-wrap {
   display: flex;
   justify-content: center;

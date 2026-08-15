@@ -1,22 +1,34 @@
 import {
+  acceptHospital,
   airportBeginFly,
   airportFlyTo,
   airportStay,
   cancelAirportDest,
+  cancelForceAuction,
   chooseBuy,
   chooseUpgrade,
   createInitialState,
   currentPlayer,
   declineBuy,
+  declineRentFree,
   declineUpgrade,
   endTurn,
   finishSettlement,
   keepFacility,
+  ownedPropertiesForCurrent,
+  pickForceAuctionTile,
+  portDispatchTakeCash,
+  portDispatchTakeShip,
   portSail,
   portStay,
+  proceedForceAuction,
   propertyTiles,
   rollDice,
   sellFacility,
+  skipSwap,
+  swapWith,
+  useDischargeCard,
+  useRentFree,
   type GameConfig,
   type GameState,
   type SpecialKind,
@@ -40,16 +52,27 @@ export interface GameSession {
   portSail(useShip: boolean): void;
   sellFacility(): void;
   keepFacility(): void;
+  useDischargeCard(): void;
+  acceptHospital(): void;
+  useRentFree(): void;
+  declineRentFree(): void;
+  portDispatchTakeCash(): void;
+  portDispatchTakeShip(): void;
+  cancelForceAuction(): void;
+  proceedForceAuction(): void;
+  pickForceAuctionTile(tileIndex: number): void;
+  skipSwap(): void;
+  swapWith(otherId: string): void;
   save?(): string;
   load?(raw: string): void;
 }
 
-function aiPickAirportDest(state: GameState): number | null {
+function aiPickAirportDest(state: GameState, free: boolean): number | null {
   const player = currentPlayer(state);
   const candidates = propertyTiles(state)
     .map((t) => ({
       t,
-      fare: (t.price ?? 0) * 3,
+      fare: free ? 0 : (t.price ?? 0) * 3,
       unowned: state.deeds[t.index]?.ownerId == null,
     }))
     .filter((c) => c.fare <= player.cash)
@@ -63,7 +86,7 @@ function aiPickAirportDest(state: GameState): number | null {
 function aiResolveSettle(state: GameState): GameState {
   let s = state;
   let guard = 0;
-  while (s.phase === "settle" && s.prompt.kind !== "idle" && guard < 20) {
+  while (s.phase === "settle" && s.prompt.kind !== "idle" && guard < 30) {
     guard += 1;
     const player = currentPlayer(s);
 
@@ -91,21 +114,17 @@ function aiResolveSettle(state: GameState): GameState {
     }
 
     if (s.prompt.kind === "port") {
-      if (player.hasShip && player.cash >= 200) {
-        s = portSail(s, true);
-      } else if (player.cash >= 1000) {
-        s = portSail(s, false);
-      } else {
-        s = portStay(s);
-      }
+      if (player.hasShip && player.cash >= 200) s = portSail(s, true);
+      else if (player.cash >= 1000) s = portSail(s, false);
+      else s = portStay(s);
       continue;
     }
 
-    if (s.prompt.kind === "airport") {
-      const dest = aiPickAirportDest(s);
-      if (dest == null) {
-        s = airportStay(s);
-      } else {
+    if (s.prompt.kind === "airport" || s.prompt.kind === "freeFlight") {
+      const free = s.prompt.kind === "freeFlight";
+      const dest = aiPickAirportDest(s, free);
+      if (dest == null) s = airportStay(s);
+      else {
         s = airportBeginFly(s);
         s = airportFlyTo(s, dest);
       }
@@ -113,13 +132,55 @@ function aiResolveSettle(state: GameState): GameState {
     }
 
     if (s.prompt.kind === "airportDest") {
-      const dest = aiPickAirportDest(s);
+      const dest = aiPickAirportDest(s, s.prompt.free);
       if (dest == null) {
         s = cancelAirportDest(s);
         s = airportStay(s);
       } else {
         s = airportFlyTo(s, dest);
       }
+      continue;
+    }
+
+    if (s.prompt.kind === "hospitalAdmit") {
+      s = player.hasDischarge ? useDischargeCard(s) : acceptHospital(s);
+      continue;
+    }
+
+    if (s.prompt.kind === "rentFree") {
+      s = useRentFree(s);
+      continue;
+    }
+
+    if (s.prompt.kind === "portDispatch") {
+      s = player.hasShip
+        ? portDispatchTakeCash(s)
+        : portDispatchTakeShip(s);
+      continue;
+    }
+
+    if (s.prompt.kind === "forceAuction") {
+      s = player.hasMafiaDeed
+        ? cancelForceAuction(s)
+        : proceedForceAuction(s);
+      continue;
+    }
+
+    if (s.prompt.kind === "forceAuctionPick") {
+      const props = ownedPropertiesForCurrent(s).sort(
+        (a, b) => (a.price ?? 0) - (b.price ?? 0),
+      );
+      if (!props[0]) {
+        s = { ...s, prompt: { kind: "idle" } };
+      } else {
+        s = pickForceAuctionTile(s, props[0].index);
+      }
+      continue;
+    }
+
+    if (s.prompt.kind === "swap") {
+      s = skipSwap(s);
+      continue;
     }
   }
   return s;
@@ -244,6 +305,50 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     },
     keepFacility() {
       state = keepFacility(state);
+      emit();
+    },
+    useDischargeCard() {
+      state = useDischargeCard(state);
+      emit();
+    },
+    acceptHospital() {
+      state = acceptHospital(state);
+      emit();
+    },
+    useRentFree() {
+      state = useRentFree(state);
+      emit();
+    },
+    declineRentFree() {
+      state = declineRentFree(state);
+      emit();
+    },
+    portDispatchTakeCash() {
+      state = portDispatchTakeCash(state);
+      emit();
+    },
+    portDispatchTakeShip() {
+      state = portDispatchTakeShip(state);
+      emit();
+    },
+    cancelForceAuction() {
+      state = cancelForceAuction(state);
+      emit();
+    },
+    proceedForceAuction() {
+      state = proceedForceAuction(state);
+      emit();
+    },
+    pickForceAuctionTile(tileIndex: number) {
+      state = pickForceAuctionTile(state, tileIndex);
+      emit();
+    },
+    skipSwap() {
+      state = skipSwap(state);
+      emit();
+    },
+    swapWith(otherId: string) {
+      state = swapWith(state, otherId);
       emit();
     },
     save() {
