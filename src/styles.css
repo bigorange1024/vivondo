@@ -149,6 +149,10 @@ body {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
 }
 
+.token.on-track {
+  box-shadow: 0 0 0 2px #1a1a1a, 0 2px 4px rgba(0, 0, 0, 0.35);
+}
+
 .deed-mark {
   position: absolute;
   width: 14px;

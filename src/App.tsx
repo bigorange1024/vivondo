@@ -4,10 +4,14 @@ import { BOARD_PNG, tileCenterPercent } from "./engine/board";
 import { CARD_ZH } from "./engine/deck";
 import {
   getAuctionView,
+  gunBuildOptions,
+  gunDemolishOptions,
+  mafiaEntrances,
   ownedPropertiesForCurrent,
   ownedPropertiesForDebtor,
   propertyTiles,
 } from "./engine/game";
+import { racetrackSeatPercent } from "./engine/racetrack";
 import { createSoloSession, type GameState } from "./session/solo";
 
 export default function App() {
@@ -67,18 +71,26 @@ export default function App() {
         </div>
         <div className="top-meta">
           回合 {state.turn} · {current.name}
+          {current.racetrackPos != null
+            ? ` · 跑马场格 ${current.racetrackPos}`
+            : ""}
           {current.hospitalSkips > 0
             ? ` · 住院剩余 ${current.hospitalSkips}`
             : ""}
           {state.lastEvent ? ` · 上张 ${CARD_ZH[state.lastEvent]}` : ""}
+          {state.lastTrackDice
+            ? ` · 场内 ${state.lastTrackDice[0]}−${state.lastTrackDice[1]}`
+            : ""}
           {" · "}
           {state.winnerId
             ? "终局"
-            : state.phase === "roll"
-              ? "掷骰"
-              : state.phase === "settle"
-                ? "结算"
-                : "回合结束"}
+            : current.racetrackPos != null && state.phase === "roll"
+              ? "跑马场掷骰"
+              : state.phase === "roll"
+                ? "掷骰"
+                : state.phase === "settle"
+                  ? "结算"
+                  : "回合结束"}
           {" · 奖池 "}
           {state.casinoPool}
           {" · 牌堆 "}
@@ -102,7 +114,11 @@ export default function App() {
                   {p.eliminated ? " · 出局" : ""}
                 </div>
                 <div className="pcash">¥{p.cash}</div>
-                <div className="ppos">{state.tiles[p.position]?.zh ?? "—"}</div>
+                <div className="ppos">
+                  {p.racetrackPos != null
+                    ? `跑马场 · ${p.racetrackPos}`
+                    : (state.tiles[p.position]?.zh ?? "—")}
+                </div>
                 {tokenBits(p) ? (
                   <div className="ptokens">{tokenBits(p)}</div>
                 ) : null}
@@ -158,17 +174,23 @@ export default function App() {
               })}
               {state.players.map((p, i) => {
                 if (p.eliminated) return null;
-                const tile = state.tiles[p.position]!;
-                const { x, y } = tileCenterPercent(tile);
+                const seat =
+                  p.racetrackPos != null
+                    ? racetrackSeatPercent(p.racetrackPos)
+                    : tileCenterPercent(state.tiles[p.position]!);
                 const offset = (i - (state.players.length - 1) / 2) * 10;
+                const label =
+                  p.racetrackPos != null
+                    ? `${p.name} @ 跑马场${p.racetrackPos}`
+                    : `${p.name} @ ${state.tiles[p.position]!.zh}`;
                 return (
                   <div
                     key={p.id}
-                    className="token"
-                    title={`${p.name} @ ${tile.zh}`}
+                    className={`token${p.racetrackPos != null ? " on-track" : ""}`}
+                    title={label}
                     style={{
-                      left: `calc(${x}% + ${offset}px)`,
-                      top: `calc(${y}% + ${offset * 0.3}px)`,
+                      left: `calc(${seat.x}% + ${offset}px)`,
+                      top: `calc(${seat.y}% + ${offset * 0.3}px)`,
                       background: p.color,
                       zIndex: i + 10,
                     }}
@@ -183,11 +205,13 @@ export default function App() {
           <div className="panel">
             <div className="label">骰子</div>
             <div className="dice">
-              {state.lastCasinoDice
-                ? `${state.lastCasinoDice[0]}+${state.lastCasinoDice[1]}`
-                : state.lastDice == null
-                  ? "—"
-                  : state.lastDice}
+              {state.lastTrackDice
+                ? `${state.lastTrackDice[0]}−${state.lastTrackDice[1]}`
+                : state.lastCasinoDice
+                  ? `${state.lastCasinoDice[0]}+${state.lastCasinoDice[1]}`
+                  : state.lastDice == null
+                    ? "—"
+                    : state.lastDice}
             </div>
           </div>
 
@@ -571,13 +595,108 @@ export default function App() {
             </div>
           )}
 
+          {humanTurn && prompt.kind === "mafiaEnter" && (
+            <div className="panel choice">
+              <div className="label">黑手党入口</div>
+              <p>即将进入跑马场。可弃置黑手党地契取消。</p>
+              <div className="actions">
+                {current.hasMafiaDeed && (
+                  <button
+                    type="button"
+                    onClick={() => session.cancelMafiaEnter()}
+                  >
+                    用黑手党地契取消
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => session.acceptMafiaEnter()}
+                >
+                  进入跑马场
+                </button>
+              </div>
+            </div>
+          )}
+
+          {humanTurn && prompt.kind === "racetrackGunBuild" && (
+            <div className="panel choice dest-list">
+              <div className="label">手枪 · 免费加盖</div>
+              <p>选择一块未满 3 屋的普通国家地产（不可特性化）。</p>
+              <ul>
+                {gunBuildOptions(state, current.id).map((t) => (
+                  <li key={t.index}>
+                    <button
+                      type="button"
+                      className="dest-btn"
+                      onClick={() => session.pickGunBuild(t.index)}
+                    >
+                      {t.zh} · 现 {state.deeds[t.index]?.houses ?? 0} 屋
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {humanTurn && prompt.kind === "racetrackGunDemolish" && (
+            <div className="panel choice dest-list">
+              <div className="label">手枪 · 拆房</div>
+              <p>普通地拆 1 屋无退款；特殊地拆后变普通 3 屋。</p>
+              <ul>
+                {gunDemolishOptions(state, current.id).map((t) => {
+                  const d = state.deeds[t.index]!;
+                  return (
+                    <li key={t.index}>
+                      <button
+                        type="button"
+                        className="dest-btn"
+                        onClick={() => session.pickGunDemolish(t.index)}
+                      >
+                        {t.zh}
+                        {d.special
+                          ? ` · 特殊→3屋`
+                          : ` · ${d.houses} 屋→${d.houses - 1}`}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+
+          {humanTurn && prompt.kind === "racetrackExit" && (
+            <div className="panel choice dest-list">
+              <div className="label">跑马场离场</div>
+              <p>选择一处黑手党入口回到大地图。</p>
+              <ul>
+                {mafiaEntrances(state).map((t) => (
+                  <li key={t.index}>
+                    <button
+                      type="button"
+                      className="dest-btn"
+                      onClick={() => session.chooseRacetrackExit(t.index)}
+                    >
+                      {t.zh}（格 {t.index}）
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {humanTurn && prompt.kind === "swap" && (
             <div className="panel choice dest-list">
               <div className="label">位置互换</div>
               <p>与一名玩家互换位置（双方不结算新格）。</p>
               <ul>
                 {state.players
-                  .filter((p) => !p.eliminated && p.id !== current.id)
+                  .filter(
+                    (p) =>
+                      !p.eliminated &&
+                      p.id !== current.id &&
+                      p.racetrackPos == null,
+                  )
                   .map((p) => (
                     <li key={p.id}>
                       <button
@@ -626,7 +745,7 @@ export default function App() {
             </ul>
           </div>
           <p className="hint">
-            外环试玩 Demo：地产 / 角格 / 港口 / 设施 / 事件 / 拍卖已可玩。黑手党跑马场暂未开放。
+            全环可玩：地产 / 角格 / 港口 / 设施 / 事件 / 拍卖 / 黑手党跑马场。
           </p>
         </aside>
       </main>

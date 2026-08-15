@@ -1,5 +1,6 @@
 import {
   acceptHospital,
+  acceptMafiaEnter,
   airportBeginFly,
   airportFlyTo,
   airportStay,
@@ -8,7 +9,9 @@ import {
   auctionDoPass,
   cancelAirportDest,
   cancelForceAuction,
+  cancelMafiaEnter,
   chooseBuy,
+  chooseRacetrackExit,
   chooseUpgrade,
   createInitialState,
   currentPlayer,
@@ -18,11 +21,16 @@ import {
   endTurn,
   finishSettlement,
   getAuctionView,
+  gunBuildOptions,
+  gunDemolishOptions,
   keepFacility,
+  mafiaEntrances,
   ownedPropertiesForCurrent,
   ownedPropertiesForDebtor,
   pickDebtAuctionTile,
   pickForceAuctionTile,
+  pickGunBuild,
+  pickGunDemolish,
   portDispatchTakeCash,
   portDispatchTakeShip,
   portSail,
@@ -71,6 +79,11 @@ export interface GameSession {
   auctionBid(amount?: number): void;
   auctionBuyout(): void;
   auctionPass(): void;
+  cancelMafiaEnter(): void;
+  acceptMafiaEnter(): void;
+  pickGunBuild(tileIndex: number): void;
+  pickGunDemolish(tileIndex: number): void;
+  chooseRacetrackExit(tileIndex: number): void;
   skipSwap(): void;
   swapWith(otherId: string): void;
   save?(): string;
@@ -220,6 +233,33 @@ function aiResolveSettle(state: GameState): GameState {
 
     if (s.prompt.kind === "swap") {
       s = skipSwap(s);
+      continue;
+    }
+
+    if (s.prompt.kind === "mafiaEnter") {
+      s = player.hasMafiaDeed ? cancelMafiaEnter(s) : acceptMafiaEnter(s);
+      continue;
+    }
+
+    if (s.prompt.kind === "racetrackGunBuild") {
+      const opts = gunBuildOptions(s, player.id);
+      s = opts[0] ? pickGunBuild(s, opts[0].index) : { ...s, prompt: { kind: "idle" } };
+      continue;
+    }
+
+    if (s.prompt.kind === "racetrackGunDemolish") {
+      const opts = gunDemolishOptions(s, player.id);
+      s = opts[0]
+        ? pickGunDemolish(s, opts[0].index)
+        : { ...s, prompt: { kind: "idle" } };
+      continue;
+    }
+
+    if (s.prompt.kind === "racetrackExit") {
+      const entrances = mafiaEntrances(s);
+      s = entrances[0]
+        ? chooseRacetrackExit(s, entrances[0].index)
+        : { ...s, prompt: { kind: "idle" } };
       continue;
     }
   }
@@ -443,6 +483,32 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     auctionPass() {
       state = auctionDoPass(state);
       afterHumanAuction();
+    },
+    cancelMafiaEnter() {
+      state = cancelMafiaEnter(state);
+      emit();
+    },
+    acceptMafiaEnter() {
+      state = acceptMafiaEnter(state);
+      emit();
+      if (state.prompt.kind === "auction" || state.prompt.kind === "debtAuctionPick") {
+        queueMicrotask(continueAiAuctionIfNeeded);
+      }
+    },
+    pickGunBuild(tileIndex: number) {
+      state = pickGunBuild(state, tileIndex);
+      emit();
+    },
+    pickGunDemolish(tileIndex: number) {
+      state = pickGunDemolish(state, tileIndex);
+      emit();
+    },
+    chooseRacetrackExit(tileIndex: number) {
+      state = chooseRacetrackExit(state, tileIndex);
+      emit();
+      if (state.prompt.kind === "auction") {
+        queueMicrotask(continueAiAuctionIfNeeded);
+      }
     },
     skipSwap() {
       state = skipSwap(state);

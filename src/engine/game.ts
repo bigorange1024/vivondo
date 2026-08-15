@@ -13,6 +13,12 @@ import {
   type SpecialKind,
 } from "./deeds";
 import {
+  moveOnTrack,
+  rollTrackDelta,
+  trackCellKind,
+  trackCellZh,
+} from "./racetrack";
+import {
   auctionBuyout as auctionBuyoutCore,
   auctionPass as auctionPassCore,
   auctionPlaceBid,
@@ -57,6 +63,10 @@ export type SettlePrompt =
   | { kind: "forceAuctionPick" }
   | { kind: "debtAuctionPick" }
   | { kind: "auction" }
+  | { kind: "mafiaEnter" }
+  | { kind: "racetrackGunBuild" }
+  | { kind: "racetrackGunDemolish" }
+  | { kind: "racetrackExit" }
   | { kind: "swap" };
 
 export interface PendingDebt {
@@ -80,6 +90,10 @@ export interface PlayerState {
   hasRentFree: boolean;
   hasDischarge: boolean;
   hasMafiaDeed: boolean;
+  /** null = on main ring; 0..20 on racetrack. */
+  racetrackPos: number | null;
+  /** After leaving track onto a mafia tile, skip re-entry once. */
+  skipNextMafiaEnter: boolean;
 }
 
 const FACILITY_BUYBACK = 500;
@@ -101,6 +115,8 @@ export interface GameState {
   prompt: SettlePrompt;
   lastDice: number | null;
   lastCasinoDice: [number, number] | null;
+  /** Last racetrack effect dice pair (for D). */
+  lastTrackDice: [number, number] | null;
   casinoPool: number;
   eventDeck: EventDeckState;
   lastEvent: EventCardId | null;
@@ -135,6 +151,8 @@ function blankPlayer(
     hasRentFree: false,
     hasDischarge: false,
     hasMafiaDeed: false,
+    racetrackPos: null,
+    skipNextMafiaEnter: false,
   };
 }
 
@@ -174,13 +192,14 @@ export function createInitialState(config: GameConfig): GameState {
     prompt: { kind: "idle" },
     lastDice: null,
     lastCasinoDice: null,
+    lastTrackDice: null,
     casinoPool: 0,
     eventDeck: createEventDeck(),
     lastEvent: null,
     auction: null,
     pendingDebt: null,
     turn: 1,
-    log: ["对局开始 · Vivondo · 外环试玩（跑马场未开放）"],
+    log: ["对局开始 · Vivondo"],
     winnerId: null,
   };
 }
@@ -468,6 +487,19 @@ export function rollDice(state: GameState): GameState {
     return { ...s, phase: "end", prompt: { kind: "idle" }, lastDice: null };
   }
 
+  // Racetrack turn
+  if (player.racetrackPos != null) {
+    const dice = 1 + Math.floor(Math.random() * 6);
+    let s: GameState = {
+      ...state,
+      lastDice: dice,
+      lastCasinoDice: null,
+      phase: "settle",
+    };
+    s = pushLog(s, `${player.name} 跑马场掷出 ${dice}`);
+    return racetrackAdvance(s, dice);
+  }
+
   const dice = 1 + Math.floor(Math.random() * 6);
   const from = player.position;
   const to = (from + dice) % BOARD_TILE_COUNT;
@@ -477,6 +509,7 @@ export function rollDice(state: GameState): GameState {
     ...mapPlayer(state, playerIndex, { position: to }),
     lastDice: dice,
     lastCasinoDice: null,
+    lastTrackDice: null,
     phase: "settle",
   };
   s = pushLog(s, `${player.name} 掷出 ${dice}，前往 ${tile.zh}（${tile.en}）`);
@@ -501,13 +534,285 @@ function beginTileSettlement(state: GameState): GameState {
     return drawAndResolveEvent(state);
   }
   if (tile.kind === "mafia") {
-    return pushLog(
-      { ...state, prompt: { kind: "idle" } },
-      `${player.name} 踩中黑手党入口 · 跑马场后续接入`,
-    );
+    return settleMafiaEntrance(state);
   }
 
   return { ...state, prompt: { kind: "idle" } };
+}
+
+function settleMafiaEntrance(state: GameState): GameState {
+  const player = currentPlayer(state);
+  if (player.skipNextMafiaEnter) {
+    return pushLog(
+      {
+        ...mapPlayer(state, state.currentPlayerIndex, {
+          skipNextMafiaEnter: false,
+        }),
+        prompt: { kind: "idle" },
+      },
+      `${player.name} 从跑马场回到黑手党入口`,
+    );
+  }
+  if (player.hasMafiaDeed) {
+    return { ...state, prompt: { kind: "mafiaEnter" } };
+  }
+  return enterRacetrack(state);
+}
+
+function enterRacetrack(state: GameState): GameState {
+  const player = currentPlayer(state);
+  let s = mapPlayer(state, state.currentPlayerIndex, { racetrackPos: 0 });
+  s = pushLog(
+    s,
+    `${player.name} 进入黑手党跑马场（起终点）· 本回合必须立刻前进`,
+  );
+  const dice = 1 + Math.floor(Math.random() * 6);
+  s = { ...s, lastDice: dice, phase: "settle" };
+  s = pushLog(s, `${player.name} 进场掷出 ${dice}`);
+  return racetrackAdvance(s, dice);
+}
+
+function racetrackAdvance(state: GameState, steps: number): GameState {
+  const playerIndex = state.currentPlayerIndex;
+  const player = state.players[playerIndex]!;
+  if (player.racetrackPos == null) return state;
+
+  const moved = moveOnTrack(player.racetrackPos, steps);
+  let s = mapPlayer(state, playerIndex, { racetrackPos: moved.pos });
+
+  if (moved.exited) {
+    s = pushLog(s, `${player.name} 跑完一圈，准备离场`);
+    return {
+      ...mapPlayer(s, playerIndex, { racetrackPos: null }),
+      prompt: { kind: "racetrackExit" },
+    };
+  }
+
+  const kind = trackCellKind(moved.pos);
+  s = pushLog(
+    s,
+    `${player.name} 停在跑马场 ${moved.pos} 格（${trackCellZh(kind)}）`,
+  );
+  return resolveTrackCell(s, moved.pos, 0);
+}
+
+function resolveTrackCell(
+  state: GameState,
+  pos: number,
+  depth: number,
+): GameState {
+  if (depth > 12) {
+    return pushLog(
+      { ...state, prompt: { kind: "idle" } },
+      "脚印连锁过深，停止结算",
+    );
+  }
+
+  const kind = trackCellKind(pos);
+  if (kind === "start") {
+    return { ...state, prompt: { kind: "idle" } };
+  }
+
+  const { d1, d2, d } = rollTrackDelta();
+  let s: GameState = { ...state, lastTrackDice: [d1, d2] };
+  const player = currentPlayer(s);
+  s = pushLog(s, `跑马场判定 ${d1}−${d2}=${d}`);
+
+  if (kind === "money") {
+    const amount = d * 40;
+    if (amount > 0) {
+      s = gainCash(s, s.currentPlayerIndex, amount, "跑马场钞票");
+      return { ...s, prompt: { kind: "idle" } };
+    }
+    if (amount < 0) {
+      s = payDebt(s, s.currentPlayerIndex, -amount, null, "跑马场钞票");
+      return s.prompt.kind === "debtAuctionPick" || s.prompt.kind === "auction"
+        ? s
+        : { ...s, prompt: { kind: "idle" } };
+    }
+    return pushLog({ ...s, prompt: { kind: "idle" } }, "钞票差额为 0");
+  }
+
+  if (kind === "foot") {
+    if (d === 0) {
+      return pushLog({ ...s, prompt: { kind: "idle" } }, "脚印：不移动");
+    }
+    const from = player.racetrackPos ?? pos;
+    const moved = moveOnTrack(from, d);
+    s = mapPlayer(s, s.currentPlayerIndex, {
+      racetrackPos: moved.exited ? null : moved.pos,
+    });
+    s = pushLog(
+      s,
+      `${player.name} 脚印移动 ${d > 0 ? "+" : ""}${d}${moved.exited ? " · 离场" : ` → ${moved.pos} 格`}`,
+    );
+    if (moved.exited) {
+      return { ...s, prompt: { kind: "racetrackExit" } };
+    }
+    return resolveTrackCell(s, moved.pos, depth + 1);
+  }
+
+  // gun
+  if (d === 0) {
+    return pushLog({ ...s, prompt: { kind: "idle" } }, "手枪：无事");
+  }
+  if (d > 0) {
+    const opts = gunBuildOptions(s, player.id);
+    if (opts.length === 0) {
+      return pushLog(
+        { ...s, prompt: { kind: "idle" } },
+        "手枪加盖：无可用地产，跳过",
+      );
+    }
+    return { ...s, prompt: { kind: "racetrackGunBuild" } };
+  }
+
+  const opts = gunDemolishOptions(s, player.id);
+  if (opts.length === 0) {
+    return pushLog(
+      { ...s, prompt: { kind: "idle" } },
+      "手枪拆房：无可用地产，跳过",
+    );
+  }
+  return { ...s, prompt: { kind: "racetrackGunDemolish" } };
+}
+
+export function gunBuildOptions(
+  state: GameState,
+  ownerId: string,
+): BoardTile[] {
+  return state.tiles.filter((t) => {
+    if (t.kind !== "property") return false;
+    const d = state.deeds[t.index];
+    return (
+      d?.ownerId === ownerId && d.special == null && d.houses >= 0 && d.houses < 3
+    );
+  });
+}
+
+export function gunDemolishOptions(
+  state: GameState,
+  ownerId: string,
+): BoardTile[] {
+  return state.tiles.filter((t) => {
+    if (t.kind !== "property") return false;
+    const d = state.deeds[t.index];
+    if (d?.ownerId !== ownerId) return false;
+    if (d.special != null) return true;
+    return d.houses >= 1;
+  });
+}
+
+export function cancelMafiaEnter(state: GameState): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "mafiaEnter") {
+    return state;
+  }
+  const player = currentPlayer(state);
+  if (!player.hasMafiaDeed) return state;
+  let s = mapPlayer(state, state.currentPlayerIndex, { hasMafiaDeed: false });
+  s = {
+    ...s,
+    eventDeck: discardEventCard(s.eventDeck, "H3"),
+    prompt: { kind: "idle" },
+  };
+  return pushLog(s, `${player.name} 弃置黑手党地契，取消进入跑马场`);
+}
+
+export function acceptMafiaEnter(state: GameState): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "mafiaEnter") {
+    return state;
+  }
+  return enterRacetrack(state);
+}
+
+export function pickGunBuild(state: GameState, tileIndex: number): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "racetrackGunBuild") {
+    return state;
+  }
+  const player = currentPlayer(state);
+  const opts = gunBuildOptions(state, player.id);
+  if (!opts.some((t) => t.index === tileIndex)) return state;
+  const deed = state.deeds[tileIndex]!;
+  const tile = state.tiles[tileIndex]!;
+  let s: GameState = {
+    ...state,
+    deeds: {
+      ...state.deeds,
+      [tileIndex]: { ...deed, houses: deed.houses + 1 },
+    },
+    prompt: { kind: "idle" },
+  };
+  return pushLog(
+    s,
+    `${player.name} 手枪免费加盖 ${tile.zh} → ${deed.houses + 1} 屋`,
+  );
+}
+
+export function pickGunDemolish(state: GameState, tileIndex: number): GameState {
+  if (
+    state.phase !== "settle" ||
+    state.prompt.kind !== "racetrackGunDemolish"
+  ) {
+    return state;
+  }
+  const player = currentPlayer(state);
+  const opts = gunDemolishOptions(state, player.id);
+  if (!opts.some((t) => t.index === tileIndex)) return state;
+  const deed = state.deeds[tileIndex]!;
+  const tile = state.tiles[tileIndex]!;
+  let nextDeed: DeedState;
+  let note: string;
+  if (deed.special != null) {
+    nextDeed = { ownerId: player.id, houses: 3, special: null };
+    note = `${tile.zh} 特殊地产拆除 → 普通 3 屋`;
+  } else {
+    nextDeed = { ...deed, houses: deed.houses - 1 };
+    note = `${tile.zh} 拆除 1 屋 → ${deed.houses - 1} 屋（无退款）`;
+  }
+  let s: GameState = {
+    ...state,
+    deeds: { ...state.deeds, [tileIndex]: nextDeed },
+    prompt: { kind: "idle" },
+  };
+  return pushLog(s, `${player.name} 手枪拆房：${note}`);
+}
+
+export function skipGunEffect(state: GameState): GameState {
+  if (
+    state.phase !== "settle" ||
+    (state.prompt.kind !== "racetrackGunBuild" &&
+      state.prompt.kind !== "racetrackGunDemolish")
+  ) {
+    return state;
+  }
+  return pushLog(
+    { ...state, prompt: { kind: "idle" } },
+    `${currentPlayer(state).name} 跳过手枪效果`,
+  );
+}
+
+export function chooseRacetrackExit(
+  state: GameState,
+  mafiaTileIndex: number,
+): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "racetrackExit") {
+    return state;
+  }
+  const tile = state.tiles[mafiaTileIndex];
+  if (!tile || tile.kind !== "mafia") return state;
+
+  const player = currentPlayer(state);
+  let s = mapPlayer(state, state.currentPlayerIndex, {
+    position: mafiaTileIndex,
+    racetrackPos: null,
+    skipNextMafiaEnter: true,
+  });
+  s = pushLog(s, `${player.name} 离场回到 ${tile.zh}`);
+  return beginTileSettlement(s);
+}
+
+export function mafiaEntrances(state: GameState): BoardTile[] {
+  return state.tiles.filter((t) => t.kind === "mafia");
 }
 
 function settleOwnable(state: GameState, tile: BoardTile): GameState {
@@ -1581,10 +1886,16 @@ export function skipSwap(state: GameState): GameState {
 export function swapWith(state: GameState, otherId: string): GameState {
   if (state.phase !== "settle" || state.prompt.kind !== "swap") return state;
   const me = currentPlayer(state);
+  if (me.racetrackPos != null) {
+    return pushLog(state, "你在跑马场内，不能换位");
+  }
   const otherIndex = findPlayerIndex(state, otherId);
   if (otherIndex < 0) return state;
   const other = state.players[otherIndex]!;
   if (other.eliminated || other.id === me.id) return state;
+  if (other.racetrackPos != null) {
+    return pushLog(state, "不能与跑马场内的玩家换位");
+  }
 
   const myPos = me.position;
   const theirPos = other.position;
@@ -1624,6 +1935,7 @@ export function endTurn(state: GameState): GameState {
       prompt: { kind: "idle" },
       lastDice: null,
       lastCasinoDice: null,
+      lastTrackDice: null,
       turn: wrapped ? state.turn + 1 : state.turn,
     },
     `轮到 ${state.players[next]!.name}`,
