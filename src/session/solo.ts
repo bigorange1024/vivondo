@@ -324,6 +324,8 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     for (const l of listeners) l(state);
   };
 
+  let auctionEpoch = 0;
+
   /** After AI settle becomes idle (e.g. auction done), close turn and chain. */
   const finishAiSettleAndContinue = () => {
     if (state.winnerId) return;
@@ -342,9 +344,10 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
 
   const continueAiAuctionIfNeeded = () => {
     if (state.winnerId) return;
+    const epoch = auctionEpoch;
 
+    // Already finished — just advance AI turn (no error log)
     if (state.prompt.kind !== "auction") {
-      // Auction finished while AI was acting / after last bid
       finishAiSettleAndContinue();
       return;
     }
@@ -354,32 +357,33 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       ? state.players.find((p) => p.id === view.actorId)
       : null;
 
-    if (!actor) {
-      state = {
-        ...state,
-        auction: null,
-        prompt: { kind: "idle" },
-        log: ["拍卖异常结束", ...state.log].slice(0, 60),
-      };
+    if (!view || !actor) {
+      // Recover desynced auction quietly (sale often already logged)
+      state = { ...state, auction: null, prompt: { kind: "idle" } };
       emit();
       finishAiSettleAndContinue();
       return;
     }
 
     if (actor.kind !== "ai") {
-      // Wait for human bid — UI handles it
       return;
     }
 
     const before = settleKey(state);
     state = aiAuctionStep(state);
     emit();
+    if (epoch !== auctionEpoch) return;
+
     if (settleKey(state) === before && state.prompt.kind === "auction") {
-      // No progress — force pass once more via engine, or abort
       state = auctionDoPass(state);
       emit();
     }
-    queueMicrotask(continueAiAuctionIfNeeded);
+
+    if (state.prompt.kind === "auction") {
+      queueMicrotask(continueAiAuctionIfNeeded);
+    } else {
+      finishAiSettleAndContinue();
+    }
   };
 
   const runAiIfNeeded = () => {
@@ -397,6 +401,7 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
         state = aiResolveSettle(state);
         emit();
         if (state.prompt.kind === "auction") {
+          auctionEpoch += 1;
           queueMicrotask(continueAiAuctionIfNeeded);
           return;
         }
@@ -404,7 +409,6 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
           finishAiSettleAndContinue();
           return;
         }
-        // Still blocked on human-only prompt during AI turn — abort
         state = {
           ...state,
           auction: null,
@@ -439,6 +443,7 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     emit();
 
     if (state.prompt.kind === "auction") {
+      auctionEpoch += 1;
       queueMicrotask(continueAiAuctionIfNeeded);
       return;
     }
@@ -465,6 +470,7 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     emit();
     queueMicrotask(() => {
       if (state.prompt.kind === "auction") {
+        auctionEpoch += 1;
         continueAiAuctionIfNeeded();
         return;
       }
@@ -473,7 +479,6 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
         finishAiSettleAndContinue();
         return;
       }
-      // Human's own turn — wait for Continue
     });
   };
 

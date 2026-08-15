@@ -1370,23 +1370,39 @@ function applyAuctionResult(
     return pushLog(state, result.reason);
   }
   if (result.type === "continue") {
-    const actorId = currentAuctionActor(result.auction);
-    const actor =
-      actorId != null
-        ? state.players[findPlayerIndex(state, actorId)]?.name
-        : "?";
+    const synced = result.auction;
+    const actorId = currentAuctionActor(synced);
+    // Nobody left to act — finish instead of leaving a broken auction prompt
+    if (!actorId) {
+      if (synced.highBidderId && synced.currentBid > 0) {
+        return finalizeSold(
+          { ...state, auction: synced },
+          synced,
+          synced.highBidderId,
+          synced.currentBid,
+        );
+      }
+      return finalizePassedIn(
+        { ...state, auction: null },
+        synced.tileIndex,
+        synced.sellerId,
+        synced.facePrice,
+        synced.source,
+      );
+    }
+    const actor = state.players[findPlayerIndex(state, actorId)]?.name ?? "?";
     let s: GameState = {
       ...state,
-      auction: result.auction,
+      auction: synced,
       prompt: { kind: "auction" },
     };
-    if (result.auction.currentBid > 0 && result.auction.highBidderId) {
+    if (synced.currentBid > 0 && synced.highBidderId) {
       const high =
-        state.players[findPlayerIndex(state, result.auction.highBidderId)]
-          ?.name ?? "?";
+        state.players[findPlayerIndex(state, synced.highBidderId)]?.name ??
+        "?";
       s = pushLog(
         s,
-        `当前最高价 ${result.auction.currentBid}（${high}）· 下一位 ${actor}`,
+        `当前最高价 ${synced.currentBid}（${high}）· 下一位 ${actor}`,
       );
     } else {
       s = pushLog(s, `等待出价 · 下一位 ${actor}`);
@@ -1933,6 +1949,7 @@ export function endTurn(state: GameState): GameState {
       currentPlayerIndex: next,
       phase: "roll",
       prompt: { kind: "idle" },
+      auction: null,
       lastDice: null,
       lastCasinoDice: null,
       lastTrackDice: null,
