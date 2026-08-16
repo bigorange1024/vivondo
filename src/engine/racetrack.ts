@@ -1,4 +1,4 @@
-/** R-031 mafia racetrack: 21 cells (0 = start/finish). */
+﻿/** R-031 casino racetrack: 21 cells (0 = start/finish). */
 
 export const TRACK_LEN = 21;
 
@@ -167,5 +167,5 @@ export const BOARD_TOP_STRIP = {
   left: (40 / PLAY) * 100,
   top: 0.35,
   width: ((PLAY - 80) / PLAY) * 100,
-  height: (32 / BOARD_IMG_H) * 100,
+  height: (40 / BOARD_IMG_H) * 100,
 };

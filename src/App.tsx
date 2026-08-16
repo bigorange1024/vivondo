@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+﻿import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, type ReactNode } from "react";
 import boardUrl from "@assets/board-map-v7.png";
 import { BOARD_PNG, LEGEND_CONTINENTS, legendContinentSwatchPercent, tileCenterPercent, tileContinentBarPercent, tileRectPercent } from "./engine/board";
 import { CARD_ZH } from "./engine/deck";
@@ -8,17 +8,28 @@ import {
   gunBuildOptions,
   gunDemolishOptions,
   initiativeActorId,
-  mafiaEntrances,
+  casinoEntrances,
   ownedPropertiesForCurrent,
   ownedPropertiesForDebtor,
+  demolishOptionsForDebtor,
+  facilitySellOptionsForDebtor,
   propertyTiles,
+  type GameConfig,
+  type GameState,
 } from "./engine/game";
 import {
   BOARD_TOP_STRIP,
   PLAZA_HUD_PERCENT,
   racetrackSeatPercent,
 } from "./engine/racetrack";
-import { createSoloSession, type GameState } from "./session/solo";
+import {
+  buildSaveFile,
+  deleteSaveSlot,
+  readSaveSlot,
+  writeSaveSlot,
+} from "./persist/saves";
+import { createSoloSession, type GameSession } from "./session/solo";
+import { ConfirmDialog } from "./ui/ConfirmDialog";
 import {
   IconCoin,
   IconDiceFace,
@@ -29,10 +40,15 @@ import {
   IconShip,
   IconSuitcase,
   IconVipCard,
+  IconPort,
+  IconOil,
+  IconMine,
 } from "./ui/icons";
 import { locationView } from "./ui/location";
 import { LocFlag } from "./ui/locFlag";
 import { Money } from "./ui/money";
+import { SaveSlotModal, type SaveModalMode } from "./ui/SaveSlotModal";
+import { SetupScreen } from "./ui/SetupScreen";
 
 /** Design width where HUD type/icons look correct at 1×. */
 const BOARD_DESIGN_WIDTH = 900;
@@ -80,20 +96,55 @@ function DiceReadout({
 }
 
 export default function App() {
-  const session = useMemo(() => createSoloSession({ humans: 1, ais: 3 }), []);
-  const [state, setState] = useState<GameState>(() => session.getState());
-  const [aiPlaying, setAiPlaying] = useState(() => session.getAiPlaying());
+  const [screen, setScreen] = useState<"setup" | "play">("setup");
+  const [config, setConfig] = useState<GameConfig | null>(null);
+  const [sessionEpoch, setSessionEpoch] = useState(0);
+  const pendingImport = useRef<GameState | null>(null);
+
+  const session = useMemo(() => {
+    if (!config) return null;
+    return createSoloSession(config);
+  }, [config, sessionEpoch]);
+
+  const [state, setState] = useState<GameState | null>(null);
+  const [aiPlaying, setAiPlaying] = useState(false);
   const boardFrameRef = useRef<HTMLDivElement>(null);
   const [boardScale, setBoardScale] = useState(1);
 
-  useEffect(
-    () =>
-      session.subscribe((s) => {
-        setState(s);
-        setAiPlaying(session.getAiPlaying());
-      }),
-    [session],
-  );
+  const [saveMode, setSaveMode] = useState<SaveModalMode | null>(null);
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    message: string;
+    danger?: boolean;
+    confirmLabel?: string;
+    onConfirm: () => void;
+  } | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!session) {
+      setState(null);
+      setAiPlaying(false);
+      return;
+    }
+    if (pendingImport.current) {
+      const snap = pendingImport.current;
+      pendingImport.current = null;
+      session.importState(snap);
+    }
+    setState(session.getState());
+    setAiPlaying(session.getAiPlaying());
+    return session.subscribe((s) => {
+      setState(s);
+      setAiPlaying(session.getAiPlaying());
+    });
+  }, [session]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 2400);
+    return () => window.clearTimeout(t);
+  }, [toast]);
 
   useEffect(() => {
     const el = boardFrameRef.current;
@@ -101,7 +152,6 @@ export default function App() {
     const update = () => {
       const w = el.clientWidth;
       if (w <= 0) return;
-      // Scale by board width only — height-based scale was crushing HUD text/controls
       setBoardScale(Math.max(0.72, Math.min(1.15, w / BOARD_DESIGN_WIDTH)));
     };
     update();
@@ -112,29 +162,228 @@ export default function App() {
       ro.disconnect();
       window.removeEventListener("resize", update);
     };
-  }, []);
+  }, [screen, session]);
 
+  const startGame = (cfg: { humans: number; ais: number }) => {
+    pendingImport.current = null;
+    setConfig({ humans: cfg.humans, ais: cfg.ais, startingCash: 5000 });
+    setSessionEpoch((n) => n + 1);
+    setScreen("play");
+  };
+
+  const goSetup = () => {
+    pendingImport.current = null;
+    setConfig(null);
+    setSessionEpoch((n) => n + 1);
+    setScreen("setup");
+    setSaveMode(null);
+    setConfirm(null);
+  };
+
+  const requestRestart = () => {
+    setConfirm({
+      title: "重新开始？",
+      message: "将离开当前对局并回到人数选择。未保存进度会丢失。",
+      danger: true,
+      confirmLabel: "重开",
+      onConfirm: () => {
+        setConfirm(null);
+        goSetup();
+      },
+    });
+  };
+
+  const applyLoad = async (slot: number) => {
+    const file = await readSaveSlot(slot);
+    if (!file) {
+      setToast(`存档 #${slot} 不存在`);
+      return;
+    }
+    pendingImport.current = file.state;
+    setConfig({
+      humans: file.config.humans,
+      ais: file.config.ais,
+      startingCash: file.config.startingCash ?? 5000,
+    });
+    setSessionEpoch((n) => n + 1);
+    setScreen("play");
+    setToast(`已读取存档 #${slot}`);
+  };
+
+  const applySave = async (slot: number) => {
+    if (!session || !config) return;
+    const file = buildSaveFile(session.exportState(), config);
+    const where = await writeSaveSlot(slot, file);
+    setToast(
+      where === "disk"
+        ? `已保存到 save/slot-${slot}.json`
+        : `已保存到浏览器本地存档 #${slot}`,
+    );
+  };
+
+  const applyDelete = async (slot: number) => {
+    await deleteSaveSlot(slot);
+    setToast(`已删除存档 #${slot}`);
+  };
+
+  const onSlotPicked = (slot: number, exists: boolean) => {
+    const mode = saveMode;
+    setSaveMode(null);
+    if (!mode) return;
+
+    if (mode === "save") {
+      setConfirm({
+        title: exists ? `覆盖存档 #${slot}？` : `保存到 #${slot}？`,
+        message: exists
+          ? "将覆盖该槽位已有进度，此操作不可撤销。"
+          : `写入 save/slot-${slot}.json（开发服务可用时）。`,
+        confirmLabel: "保存",
+        onConfirm: () => {
+          setConfirm(null);
+          void applySave(slot);
+        },
+      });
+      return;
+    }
+
+    if (mode === "load") {
+      setConfirm({
+        title: `读取存档 #${slot}？`,
+        message: screen === "play"
+          ? "将丢弃当前未保存进度，并恢复该存档盘面。"
+          : "将加载该存档并进入游戏。",
+        confirmLabel: "读取",
+        onConfirm: () => {
+          setConfirm(null);
+          void applyLoad(slot);
+        },
+      });
+      return;
+    }
+
+    setConfirm({
+      title: `删除存档 #${slot}？`,
+      message: "将删除本地存档文件，此操作不可撤销。",
+      danger: true,
+      confirmLabel: "删除",
+      onConfirm: () => {
+        setConfirm(null);
+        void applyDelete(slot);
+      },
+    });
+  };
+
+  const shell = (
+    <>
+      <SaveSlotModal
+        open={saveMode != null}
+        mode={saveMode ?? "load"}
+        onCancel={() => setSaveMode(null)}
+        onPick={(slot, info) => onSlotPicked(slot, info.exists)}
+      />
+      <ConfirmDialog
+        open={confirm != null}
+        title={confirm?.title ?? ""}
+        message={confirm?.message ?? ""}
+        danger={confirm?.danger}
+        confirmLabel={confirm?.confirmLabel}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => confirm?.onConfirm()}
+      />
+      {toast ? <div className="app-toast">{toast}</div> : null}
+    </>
+  );
+
+  if (screen === "setup" || !session || !state || !config) {
+    return (
+      <div className="app">
+        <SetupScreen
+          onStart={startGame}
+          onOpenLoad={() => setSaveMode("load")}
+          onOpenDelete={() => setSaveMode("delete")}
+        />
+        {shell}
+      </div>
+    );
+  }
+
+  return (
+    <GameTable
+      session={session}
+      state={state}
+      aiPlaying={aiPlaying}
+      boardFrameRef={boardFrameRef}
+      boardScale={boardScale}
+      onRestart={requestRestart}
+      onSave={() => setSaveMode("save")}
+      onLoad={() => setSaveMode("load")}
+      onDelete={() => setSaveMode("delete")}
+      shell={shell}
+    />
+  );
+}
+
+function GameTable({
+  session,
+  state,
+  aiPlaying,
+  boardFrameRef,
+  boardScale,
+  onRestart,
+  onSave,
+  onLoad,
+  onDelete,
+  shell,
+}: {
+  session: GameSession;
+  state: GameState;
+  aiPlaying: boolean;
+  boardFrameRef: RefObject<HTMLDivElement | null>;
+  boardScale: number;
+  onRestart: () => void;
+  onSave: () => void;
+  onLoad: () => void;
+  onDelete: () => void;
+  shell: ReactNode;
+}) {
   const current = state.players[state.currentPlayerIndex]!;
   const auctionView = getAuctionView(state);
   const auctionActor = auctionView?.actorId
     ? state.players.find((p) => p.id === auctionView.actorId)
     : null;
+  const prompt = state.prompt;
   const humanBidding =
     !!auctionActor && auctionActor.kind === "human" && !state.winnerId;
+
+  const debtDebtor = state.pendingDebt
+    ? state.players.find((p) => p.id === state.pendingDebt!.debtorId)
+    : null;
+  const humanDebtFundraising =
+    !!debtDebtor &&
+    debtDebtor.kind === "human" &&
+    !debtDebtor.eliminated &&
+    (prompt.kind === "debtDemolishPick" ||
+      prompt.kind === "debtFacilitySell" ||
+      prompt.kind === "debtAuctionPick");
 
   const initiativeActor = (() => {
     const id = initiativeActorId(state);
     return id ? state.players.find((p) => p.id === id) : null;
   })();
 
-  const prompt = state.prompt;
-
   const humanTurn =
-    ((current.kind === "human" && !state.winnerId) || humanBidding) &&
+    ((current.kind === "human" && !state.winnerId) ||
+      humanBidding ||
+      humanDebtFundraising) &&
     !aiPlaying;
   const humanPairRoll =
     state.phase === "settle" &&
     (prompt.kind === "trackJudge" || prompt.kind === "casinoRoll") &&
+    current.kind === "human" &&
+    !state.winnerId;
+  const humanEventMove =
+    state.phase === "settle" &&
+    prompt.kind === "eventMove" &&
     current.kind === "human" &&
     !state.winnerId;
 
@@ -155,12 +404,14 @@ export default function App() {
     !hospitalSkipTurn &&
     (humanInitiative ||
       humanPairRoll ||
+      humanEventMove ||
       (current.kind === "human" && state.phase === "roll"));
   const canContinue =
     current.kind === "human" &&
     !state.winnerId &&
     !aiPlaying &&
     !humanPairRoll &&
+    !humanEventMove &&
     !hospitalSkipTurn &&
     ((state.phase === "settle" && state.prompt.kind === "idle") ||
       state.phase === "end");
@@ -171,6 +422,9 @@ export default function App() {
       : (state.initiative?.partialDie ?? null);
 
   const rollButtonLabel = (() => {
+    if (humanEventMove) {
+      return prompt.direction === "back" ? "掷骰决定后退" : "掷骰决定前进";
+    }
     if (state.phase === "initiative" || humanPairRoll) {
       return pairFirst == null ? "掷第 1 次骰子" : "掷第 2 次骰子";
     }
@@ -195,6 +449,8 @@ export default function App() {
       prompt.kind === "racetrackGunDemolish" ||
       prompt.kind === "airportDest" ||
       prompt.kind === "forceAuctionPick" ||
+      prompt.kind === "debtDemolishPick" ||
+      prompt.kind === "debtFacilitySell" ||
       prompt.kind === "debtAuctionPick" ||
       prompt.kind === "swap" ||
       prompt.kind === "port" ||
@@ -206,12 +462,16 @@ export default function App() {
       ? `AI 演示 · ${current.name}`
       : state.phase === "initiative"
       ? "定出发顺序"
+      : humanEventMove
+        ? prompt.direction === "back"
+          ? "事件后退"
+          : "事件前进"
       : humanPairRoll
         ? prompt.kind === "trackJudge"
-          ? "跑马场判定"
+          ? "赌场判定"
           : "证券掷骰"
         : current.racetrackPos != null && state.phase === "roll"
-          ? "跑马场掷骰"
+          ? "赌场掷骰"
           : state.phase === "roll"
             ? current.hospitalSkips > 0
               ? "住院跳过"
@@ -253,11 +513,25 @@ export default function App() {
                 <strong>花花世界</strong>
                 <span className="brand-en">Vivondo</span>
               </div>
+              <div className="top-menu">
+                <button type="button" className="top-menu-btn" onClick={onRestart}>
+                  重开
+                </button>
+                <button type="button" className="top-menu-btn" onClick={onSave}>
+                  保存
+                </button>
+                <button type="button" className="top-menu-btn" onClick={onLoad}>
+                  读取
+                </button>
+                <button type="button" className="top-menu-btn" onClick={onDelete}>
+                  删除
+                </button>
+              </div>
               <div className="top-meta">
                 <span>{state.phase === "initiative" ? "开局" : `回合 ${state.turn}`}</span>
                 <span>{current.name}</span>
                 {current.racetrackPos != null ? (
-                  <span>马场 {current.racetrackPos}</span>
+                  <span>赌场 {current.racetrackPos}</span>
                 ) : null}
                 {current.hospitalSkips > 0 ? (
                   <span>住院 {current.hospitalSkips}</span>
@@ -267,7 +541,29 @@ export default function App() {
                 ) : null}
                 <span>{phaseLabel}</span>
                 <span>奖池 {state.casinoPool}</span>
-                <span>事件卡堆 {state.eventDeck.drawPile.length}</span>
+                <span className="event-deck-meta">
+                  事件卡堆 {state.eventDeck.drawPile.length}
+                  <span className="event-deck-tip" role="tooltip">
+                    {state.eventDeck.drawPile.length === 0 ? (
+                      <span>（抽牌堆为空）</span>
+                    ) : (
+                      (() => {
+                        const counts = new Map<string, number>();
+                        for (const id of state.eventDeck.drawPile) {
+                          const name = CARD_ZH[id];
+                          counts.set(name, (counts.get(name) ?? 0) + 1);
+                        }
+                        return [...counts.entries()]
+                          .sort((a, b) => a[0].localeCompare(b[0], "zh"))
+                          .map(([name, n]) => (
+                            <span key={name}>
+                              {n > 1 ? `${name} ×${n}` : name}
+                            </span>
+                          ));
+                      })()
+                    )}
+                  </span>
+                </span>
               </div>
             </div>
 
@@ -400,7 +696,7 @@ export default function App() {
                   const oy = group.length === 1 ? 0 : sy * stepPct;
                   const label =
                     p.racetrackPos != null
-                      ? `${p.name} @ 跑马场${p.racetrackPos}`
+                      ? `${p.name} @ 赌场${p.racetrackPos}`
                       : `${p.name} @ ${state.tiles[p.position]!.zh}`;
                   return (
                     <div
@@ -469,6 +765,29 @@ export default function App() {
                     p.racetrackPos != null
                       ? `${loc.zh} ${loc.code}·${p.racetrackPos}`
                       : `${loc.zh} ${loc.code}`;
+                  const ownedPublic = state.tiles.flatMap((t) => {
+                    if (state.deeds[t.index]?.ownerId !== p.id) return [];
+                    if (t.kind === "port") {
+                      return [
+                        {
+                          key: `port-${t.index}`,
+                          title: t.zh,
+                          Icon: IconPort,
+                        },
+                      ];
+                    }
+                    if (t.kind === "facility") {
+                      const oil = t.zh === "油田" || t.zh === "石油";
+                      return [
+                        {
+                          key: `fac-${t.index}`,
+                          title: t.zh,
+                          Icon: oil ? IconOil : IconMine,
+                        },
+                      ];
+                    }
+                    return [];
+                  });
                   return (
                     <div
                       key={p.id}
@@ -484,6 +803,19 @@ export default function App() {
                           {p.name}
                           {p.kind === "ai" ? "·AI" : ""}
                         </span>
+                        {ownedPublic.length > 0 ? (
+                          <span className="pfacilities" aria-label="公共设施">
+                            {ownedPublic.map(({ key, title, Icon }) => (
+                              <span
+                                key={key}
+                                className="pfac"
+                                title={`拥有：${title}`}
+                              >
+                                <Icon className="pfac-ico" />
+                              </span>
+                            ))}
+                          </span>
+                        ) : null}
                         <span className="pcash">
                           <Money amount={p.cash} />
                         </span>
@@ -534,7 +866,7 @@ export default function App() {
                         </span>
                         <span
                           className={`inv card${p.hasVipCard ? " on" : ""}`}
-                          title="赌场VIP卡：取消跑马场/强制拍卖"
+                          title="赌场VIP卡：取消进赌场/强制拍卖"
                         >
                           <IconVipCard className="inv-ico" />
                           VIP
@@ -628,10 +960,22 @@ export default function App() {
               ) : null}
             </div>
           )}
+          {humanEventMove && (
+            <div className="panel choice">
+              <div className="label">
+                {prompt.direction === "back" ? "随机后退" : "加速前进"}
+              </div>
+              <p>
+                {prompt.direction === "back"
+                  ? "请再掷 1 次骰子，决定沿大地图后退几格（途经起点不领薪）。"
+                  : "请再掷 1 次骰子，决定沿大地图前进几格。"}
+              </p>
+            </div>
+          )}
           {humanPairRoll && (
             <div className="panel choice">
               <div className="label">
-                {prompt.kind === "trackJudge" ? "跑马场判定" : "证券交易所"}
+                {prompt.kind === "trackJudge" ? "赌场判定" : "证券交易所"}
               </div>
               <p>
                 {prompt.kind === "trackJudge"
@@ -1053,13 +1397,63 @@ export default function App() {
             </div>
           )}
 
+          {humanTurn && prompt.kind === "debtDemolishPick" && state.pendingDebt && (
+            <div className="panel choice dest-list">
+              <div className="label">筹资拆房</div>
+              <p>
+                支付 {state.pendingDebt.reason} 还需现金，请选择拆除一处房屋（返还 ⌊地价÷2⌋）。
+              </p>
+              <ul>
+                {demolishOptionsForDebtor(state).map((t) => {
+                  const d = state.deeds[t.index]!;
+                  const refund = Math.floor((t.price ?? 0) / 2);
+                  return (
+                    <li key={t.index}>
+                      <button
+                        type="button"
+                        className="dest-btn"
+                        onClick={() => session.pickDebtDemolishTile(t.index)}
+                      >
+                        {t.zh} · {d.houses}屋→{d.houses - 1} · 返还{" "}
+                        <Money amount={refund} />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+
+          {humanTurn && prompt.kind === "debtFacilitySell" && state.pendingDebt && (
+            <div className="panel choice dest-list">
+              <div className="label">筹资退回设施</div>
+              <p>
+                无房可拆，请选择半价退回一处油田/矿山/港口（各收回{" "}
+                <Money amount={500} />）。
+              </p>
+              <ul>
+                {facilitySellOptionsForDebtor(state).map((t) => (
+                  <li key={t.index}>
+                    <button
+                      type="button"
+                      className="dest-btn"
+                      onClick={() => session.pickDebtFacilitySell(t.index)}
+                    >
+                      {t.zh} · 半价退回 <Money amount={500} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {humanTurn && prompt.kind === "debtAuctionPick" && state.pendingDebt && (
             <div className="panel choice dest-list">
               <div className="label">筹资拍卖</div>
               <p>
                 仍欠 {state.pendingDebt.reason}{" "}
                 <Money amount={state.pendingDebt.amount} />
-                ，必须拍卖国家地产。
+                ，必须选择国家地产拍卖。
               </p>
               <ul>
                 {ownedPropertiesForDebtor(state).map((t) => (
@@ -1136,15 +1530,15 @@ export default function App() {
               </div>
             )}
 
-          {humanTurn && prompt.kind === "mafiaEnter" && (
+          {humanTurn && prompt.kind === "casinoEnter" && (
             <div className="panel choice">
               <div className="label">赌城入口</div>
-              <p>即将进入跑马场。可弃置赌场VIP卡取消。</p>
+              <p>即将进入赌场。可弃置赌场VIP卡取消。</p>
               <div className="actions">
                 {current.hasVipCard && (
                   <button
                     type="button"
-                    onClick={() => session.cancelMafiaEnter()}
+                    onClick={() => session.cancelCasinoEnter()}
                   >
                     用赌场VIP卡取消
                   </button>
@@ -1152,9 +1546,9 @@ export default function App() {
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => session.acceptMafiaEnter()}
+                  onClick={() => session.acceptCasinoEnter()}
                 >
-                  进入跑马场
+                  进入赌场
                 </button>
               </div>
             </div>
@@ -1213,25 +1607,27 @@ export default function App() {
                     </li>
                   );
                 })}
-                <li>
-                  <button
-                    type="button"
-                    className="secondary dest-btn-slim"
-                    onClick={() => session.skipGunEffect()}
-                  >
-                    跳过
-                  </button>
-                </li>
+                {gunDemolishOptions(state, current.id).length === 0 ? (
+                  <li>
+                    <button
+                      type="button"
+                      className="secondary dest-btn-slim"
+                      onClick={() => session.skipGunEffect()}
+                    >
+                      跳过
+                    </button>
+                  </li>
+                ) : null}
               </ul>
             </div>
           )}
 
           {humanTurn && prompt.kind === "racetrackExit" && (
             <div className="panel choice">
-              <div className="label">跑马场离场</div>
+              <div className="label">赌场离场</div>
               <p>选择一处赌城入口回到大地图。</p>
               <div className="actions exit-actions">
-                {mafiaEntrances(state).map((t) => (
+                {casinoEntrances(state).map((t) => (
                   <button
                     key={t.index}
                     type="button"
@@ -1321,6 +1717,7 @@ export default function App() {
           </div>
         </section>
       </main>
+      {shell}
     </div>
   );
 }

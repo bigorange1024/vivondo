@@ -1,20 +1,22 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """Generate accurate board-map PNG with real national flags."""
 import math
 from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent / "board-map-v7.png"
-FONTS_DIR = Path(__file__).resolve().parent / "fonts"
-FLAGS_DIR = Path(__file__).resolve().parent / "flags"
-ICONS_DIR = Path(__file__).resolve().parent / "icons"
+ROOT = Path(__file__).resolve().parent
+OUT = ROOT / "board-map-v7.png"
+FONTS_DIR = ROOT / "fonts"
+# Single flag source shared with the Vite app (HUD LocFlag).
+FLAGS_DIR = ROOT.parent / "public" / "flags"
+ICONS_DIR = ROOT / "icons"
 
 
 def _load_icon(name: str) -> Image.Image:
     return Image.open(ICONS_DIR / f"{name}.png").convert("RGBA")
 
 
-# Grok/AI original icons (see assets/import_icons.py)
+# Board-tile icons (see assets/import_icons.py)
 ICONS = {
     name: _load_icon(name)
     for name in (
@@ -79,7 +81,7 @@ TOP = [
     ("port", "利物浦港", "Port of Liverpool", None, "1000", "port_n"),
     ("property", "法国", "France", EUROPE, "560/70", "fr"),
     ("property", "意大利", "Italy", EUROPE, "440/55", "it"),
-    ("mafia", "蒙特卡洛赌城", "Monte Carlo", None, "", "cards"),
+    ("casinoEntrance", "蒙特卡洛赌城", "Monte Carlo", None, "", "cards"),
     ("event", "事件", "Event", None, "", None),
     ("property", "埃及", "Egypt", AFRICA, "240/30", "eg"),
     ("property", "摩洛哥", "Morocco", AFRICA, "210/25", "ma"),
@@ -103,7 +105,7 @@ BOTTOM = [
     ("port", "哈利法克斯港", "Port of Halifax", None, "1000", "port_s"),
     ("property", "加拿大", "Canada", NA, "520/65", "ca"),
     ("property", "美国", "USA", NA, "600/75", "us"),
-    ("mafia", "拉斯维加斯赌城", "Las Vegas", None, "", "chips"),
+    ("casinoEntrance", "拉斯维加斯赌城", "Las Vegas", None, "", "chips"),
     ("event", "事件", "Event", None, "", None),
     ("property", "新西兰", "New Zealand", OCEANIA, "400/50", "nz"),
     ("property", "澳大利亚", "Australia", OCEANIA, "510/65", "au"),
@@ -347,7 +349,7 @@ def make_facility_tile(w, h, zh, en, key, fonts):
     return tile
 
 
-def make_mafia_tile(w, h, zh, en, fonts, icon="cards"):
+def make_casino_entrance_tile(w, h, zh, en, fonts, icon="cards"):
     """White card: poker cards (Monte Carlo) or chips (Las Vegas) + bilingual name."""
     tile = Image.new("RGB", (w, h), WHITE)
     d = ImageDraw.Draw(tile)
@@ -473,8 +475,8 @@ def main():
         kind, zh, en, color, price, flag_key = tile
         if kind == "event":
             paste(col, row, make_event_tile(w, h, zh, en, fonts))
-        elif kind == "mafia":
-            paste(col, row, make_mafia_tile(w, h, zh, en, fonts, flag_key or "cards"))
+        elif kind == "casinoEntrance":
+            paste(col, row, make_casino_entrance_tile(w, h, zh, en, fonts, flag_key or "cards"))
         elif kind == "facility":
             paste(col, row, make_facility_tile(w, h, zh, en, flag_key, fonts))
         elif kind == "port":
@@ -730,10 +732,10 @@ def main():
 
     props = sum(1 for t in BOTTOM + LEFT + TOP + RIGHT if t[0] == "property")
     events = sum(1 for t in BOTTOM + LEFT + TOP + RIGHT if t[0] == "event")
-    mafias = sum(1 for t in BOTTOM + LEFT + TOP + RIGHT if t[0] == "mafia")
+    casinoEntrances = sum(1 for t in BOTTOM + LEFT + TOP + RIGHT if t[0] == "casinoEntrance")
     facilities = sum(1 for t in BOTTOM + LEFT + TOP + RIGHT if t[0] == "facility")
     ports = sum(1 for t in BOTTOM + LEFT + TOP + RIGHT if t[0] == "port")
-    non_prop = ("event", "mafia", "facility", "port")
+    non_prop = ("event", "casinoEntrance", "facility", "port")
     specials = {
         "LEFT": sum(1 for t in LEFT if t[0] in non_prop),
         "TOP": sum(1 for t in TOP if t[0] in non_prop),
@@ -746,17 +748,17 @@ def main():
         "RIGHT": sum(1 for t in RIGHT if t[0] == "event"),
         "BOTTOM": sum(1 for t in BOTTOM if t[0] == "event"),
     }
-    assert props == 26 and events == 8 and mafias == 2 and facilities == 2 and ports == 2
+    assert props == 26 and events == 8 and casinoEntrances == 2 and facilities == 2 and ports == 2
     assert specials == {"LEFT": 3, "TOP": 4, "RIGHT": 3, "BOTTOM": 4}
     assert all(v <= 2 for v in events_per_side.values())
     assert LEFT[5][0] == "facility" and LEFT[5][5] == "oil"
     assert RIGHT[4][0] == "facility" and RIGHT[4][5] == "mine"
     assert TOP[1][0] == "port" and BOTTOM[1][0] == "port"
-    assert TOP[3][0] == "property" and TOP[4][0] == "mafia" and TOP[5][0] == "event"
-    assert BOTTOM[3][0] == "property" and BOTTOM[4][0] == "mafia" and BOTTOM[5][0] == "event"
+    assert TOP[3][0] == "property" and TOP[4][0] == "casinoEntrance" and TOP[5][0] == "event"
+    assert BOTTOM[3][0] == "property" and BOTTOM[4][0] == "casinoEntrance" and BOTTOM[5][0] == "event"
     img.save(OUT, "PNG")
     print(
-        f"Wrote {OUT} props={props} events={events} mafia={mafias} "
+        f"Wrote {OUT} props={props} events={events} casinoEntrance={casinoEntrances} "
         f"facilities={facilities} ports={ports} specials={specials} track_cells={n_cells}"
     )
 

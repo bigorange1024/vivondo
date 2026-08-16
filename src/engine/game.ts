@@ -1,4 +1,4 @@
-import {
+﻿import {
   BOARD_TILE_COUNT,
   buildBoardTiles,
   type BoardTile,
@@ -82,9 +82,11 @@ export type SettlePrompt =
   | { kind: "freeSail" }
   | { kind: "forceAuction" }
   | { kind: "forceAuctionPick" }
+  | { kind: "debtDemolishPick" }
+  | { kind: "debtFacilitySell" }
   | { kind: "debtAuctionPick" }
   | { kind: "auction" }
-  | { kind: "mafiaEnter" }
+  | { kind: "casinoEnter" }
   | { kind: "racetrackGunBuild" }
   | { kind: "racetrackGunDemolish" }
   | { kind: "racetrackExit" }
@@ -92,7 +94,9 @@ export type SettlePrompt =
   /** Racetrack money/foot/gun: roll two dice one at a time (D = 1st − 2nd). */
   | { kind: "trackJudge"; first: number | null; pos: number; depth: number }
   /** Stock exchange: roll two dice one at a time after entry fee. */
-  | { kind: "casinoRoll"; first: number | null };
+  | { kind: "casinoRoll"; first: number | null }
+  /** E11/E12: player rolls 1d6 to move back/forward on the main ring. */
+  | { kind: "eventMove"; direction: "back" | "forward" };
 
 export interface PendingDebt {
   amount: number;
@@ -125,8 +129,8 @@ export interface PlayerState {
   hasVipCard: boolean;
   /** null = on main ring; 0..20 on racetrack. */
   racetrackPos: number | null;
-  /** After leaving track onto a mafia tile, skip re-entry once. */
-  skipNextMafiaEnter: boolean;
+  /** After leaving track onto a casino entrance tile, skip re-entry once. */
+  skipNextCasinoEnter: boolean;
 }
 
 const FACILITY_BUYBACK = 500;
@@ -158,6 +162,8 @@ export interface GameState {
   auction: AuctionState | null;
   pendingDebt: PendingDebt | null;
   pendingEstate: PendingEstate | null;
+  /** After fundraising for 证券 fees, resume entry roll / double-1 settle. */
+  pendingCasino: { stage: "entry" | "extra" } | null;
   turn: number;
   log: string[];
   winnerId: string | null;
@@ -193,13 +199,16 @@ function blankPlayer(
     hasDischarge: false,
     hasVipCard: false,
     racetrackPos: null,
-    skipNextMafiaEnter: false,
+    skipNextCasinoEnter: false,
   };
 }
 
 export function createInitialState(config: GameConfig): GameState {
   const startingCash = config.startingCash ?? 5000;
   const total = config.humans + config.ais;
+  if (config.humans < 1) {
+    throw new Error("At least one human player is required");
+  }
   if (total < 2 || total > 4) {
     throw new Error("Player count must be 2–4");
   }
@@ -249,6 +258,7 @@ export function createInitialState(config: GameConfig): GameState {
     auction: null,
     pendingDebt: null,
     pendingEstate: null,
+    pendingCasino: null,
     turn: 0,
     log: [
       `请${players[firstIdx]!.name}掷2次骰子，总点数大者先出发，平手需加赛（加赛结果不改变非加赛玩家的出发顺序）`,
@@ -542,24 +552,18 @@ function enforceMinSolvency(
   if (s.pendingEstate != null) return s;
   if (s.pendingDebt != null && s.pendingDebt.solvencyTarget == null) return s;
 
-  s = sellOilMineForCash(s, playerIndex, MIN_CASH);
-  if (s.players[playerIndex]!.cash >= MIN_CASH) return s;
-
-  const props = auctionableProperties(s, player.id);
-  if (props.length > 0) {
+  const debt: PendingDebt = {
+    amount: MIN_CASH,
+    payeeId: null,
+    reason: "恢复最低现金",
+    debtorId: player.id,
+    solvencyTarget: MIN_CASH,
+  };
+  const next = promptDebtFundraising(s, debt);
+  if (next.prompt.kind !== "idle") {
     return pushLog(
-      {
-        ...s,
-        pendingDebt: {
-          amount: MIN_CASH,
-          payeeId: null,
-          reason: "恢复最低现金",
-          debtorId: player.id,
-          solvencyTarget: MIN_CASH,
-        },
-        prompt: { kind: "debtAuctionPick" },
-      },
-      `${player.name} 现金不足 ${MIN_CASH}，必须拍卖地产筹资`,
+      next,
+      `${player.name} 现金不足 ${MIN_CASH}，必须筹资`,
     );
   }
 
@@ -576,6 +580,8 @@ function enforceMinSolvency(
 /** Keep auction / debt-pick / estate prompts after payDebt. */
 function settleAfterPayDebt(state: GameState): GameState {
   if (
+    state.prompt.kind === "debtDemolishPick" ||
+    state.prompt.kind === "debtFacilitySell" ||
     state.prompt.kind === "debtAuctionPick" ||
     state.prompt.kind === "auction" ||
     state.pendingEstate != null
@@ -655,7 +661,7 @@ function declareBankrupt(
     hasDischarge: false,
     hasVipCard: false,
     racetrackPos: null,
-    skipNextMafiaEnter: false,
+    skipNextCasinoEnter: false,
     hospitalSkips: 0,
   });
   s = pushLog(s, `${player.name} ${reason} · 破产出局`);
@@ -712,105 +718,127 @@ function auctionableProperties(
   );
 }
 
-function demolishForCash(
+function demolishableProperties(
   state: GameState,
-  playerIndex: number,
-  need: number,
-): GameState {
-  let s = state;
-  let guard = 0;
-  while (s.players[playerIndex]!.cash < need && guard++ < 40) {
-    const player = s.players[playerIndex]!;
-    let best: BoardTile | null = null;
-    for (const t of auctionableProperties(s, player.id)) {
-      const d = s.deeds[t.index]!;
-      if (d.special != null || d.houses < 1) continue;
-      if (!best || d.houses > s.deeds[best.index]!.houses) best = t;
-    }
-    if (!best) break;
-    const deed = s.deeds[best.index]!;
-    const refund = Math.floor((best.price ?? 0) / 2);
-    s = {
-      ...s,
-      deeds: {
-        ...s.deeds,
-        [best.index]: { ...deed, houses: deed.houses - 1 },
-      },
-    };
-    s = mapPlayer(s, playerIndex, {
-      cash: s.players[playerIndex]!.cash + refund,
-    });
-    s = pushLog(
-      s,
-      `${player.name} 拆除 ${best.zh} 1 屋，GM 返还 ${refund}`,
-    );
-  }
-  return s;
+  ownerId: string,
+): BoardTile[] {
+  return auctionableProperties(state, ownerId).filter((t) => {
+    const d = state.deeds[t.index]!;
+    return d.special == null && d.houses >= 1;
+  });
 }
 
-function sellOilMineForCash(
+function sellableFacilitiesAndPorts(
   state: GameState,
-  playerIndex: number,
-  need: number,
-): GameState {
-  let s = state;
-  const player = s.players[playerIndex]!;
-  if (player.cash >= need) return s;
-
-  const sellables: { kind: "facility" | "port"; zh?: string }[] = [
-    { kind: "facility", zh: "油田" },
-    { kind: "facility", zh: "矿山" },
-  ];
-  for (const item of sellables) {
-    if (s.players[playerIndex]!.cash >= need) break;
-    const tile = s.tiles.find(
-      (t) =>
-        t.kind === item.kind &&
-        t.zh === item.zh &&
-        s.deeds[t.index]?.ownerId === player.id,
-    );
-    if (!tile) continue;
-    s = {
-      ...s,
-      deeds: {
-        ...s.deeds,
-        [tile.index]: { ownerId: null, houses: 0, special: null },
-      },
-    };
-    s = mapPlayer(s, playerIndex, {
-      cash: s.players[playerIndex]!.cash + FACILITY_BUYBACK,
-    });
-    s = pushLog(
-      s,
-      `${player.name} 筹资将 ${tile.zh} 半价退回 GM，收回 ${FACILITY_BUYBACK}`,
-    );
-  }
-  // Ports: sell any owned port (names may differ)
-  while (s.players[playerIndex]!.cash < need) {
-    const tile = s.tiles.find(
-      (t) =>
-        t.kind === "port" && s.deeds[t.index]?.ownerId === player.id,
-    );
-    if (!tile) break;
-    s = {
-      ...s,
-      deeds: {
-        ...s.deeds,
-        [tile.index]: { ownerId: null, houses: 0, special: null },
-      },
-    };
-    s = mapPlayer(s, playerIndex, {
-      cash: s.players[playerIndex]!.cash + FACILITY_BUYBACK,
-    });
-    s = pushLog(
-      s,
-      `${player.name} 筹资将 ${tile.zh} 半价退回 GM，收回 ${FACILITY_BUYBACK}`,
-    );
-  }
-  return s;
+  ownerId: string,
+): BoardTile[] {
+  return state.tiles.filter(
+    (t) =>
+      (t.kind === "facility" || t.kind === "port") &&
+      state.deeds[t.index]?.ownerId === ownerId,
+  );
 }
 
-/** Pay debt with demolish → facility sell → auction → bankrupt (R-017). */
+function demolishOneHouse(
+  state: GameState,
+  playerIndex: number,
+  tileIndex: number,
+): GameState | null {
+  const player = state.players[playerIndex]!;
+  const tile = state.tiles[tileIndex];
+  const deed = state.deeds[tileIndex];
+  if (
+    !tile ||
+    tile.kind !== "property" ||
+    !deed ||
+    deed.ownerId !== player.id ||
+    deed.special != null ||
+    deed.houses < 1
+  ) {
+    return null;
+  }
+  const refund = Math.floor((tile.price ?? 0) / 2);
+  let s: GameState = {
+    ...state,
+    deeds: {
+      ...state.deeds,
+      [tileIndex]: { ...deed, houses: deed.houses - 1 },
+    },
+  };
+  s = mapPlayer(s, playerIndex, {
+    cash: s.players[playerIndex]!.cash + refund,
+  });
+  return pushLog(
+    s,
+    `${player.name} 拆除 ${tile.zh} 1 屋，GM 返还 ${refund}`,
+  );
+}
+
+function sellOneFacilityOrPort(
+  state: GameState,
+  playerIndex: number,
+  tileIndex: number,
+): GameState | null {
+  const player = state.players[playerIndex]!;
+  const tile = state.tiles[tileIndex];
+  const deed = state.deeds[tileIndex];
+  if (
+    !tile ||
+    (tile.kind !== "facility" && tile.kind !== "port") ||
+    !deed ||
+    deed.ownerId !== player.id
+  ) {
+    return null;
+  }
+  let s: GameState = {
+    ...state,
+    deeds: {
+      ...state.deeds,
+      [tileIndex]: { ownerId: null, houses: 0, special: null },
+    },
+  };
+  s = mapPlayer(s, playerIndex, {
+    cash: s.players[playerIndex]!.cash + FACILITY_BUYBACK,
+  });
+  return pushLog(
+    s,
+    `${player.name} 筹资将 ${tile.zh} 半价退回 GM，收回 ${FACILITY_BUYBACK}`,
+  );
+}
+
+/** Open next R-017 fundraising step for an outstanding debt. */
+function promptDebtFundraising(
+  state: GameState,
+  debt: PendingDebt,
+): GameState {
+  const demolishables = demolishableProperties(state, debt.debtorId);
+  if (demolishables.length > 0) {
+    return {
+      ...state,
+      pendingDebt: debt,
+      prompt: { kind: "debtDemolishPick" },
+    };
+  }
+  const facilities = sellableFacilitiesAndPorts(state, debt.debtorId);
+  if (facilities.length > 0) {
+    return {
+      ...state,
+      pendingDebt: debt,
+      prompt: { kind: "debtFacilitySell" },
+    };
+  }
+  const props = auctionableProperties(state, debt.debtorId);
+  if (props.length > 0) {
+    return {
+      ...state,
+      pendingDebt: debt,
+      prompt: { kind: "debtAuctionPick" },
+    };
+  }
+  return { ...state, pendingDebt: debt, prompt: { kind: "idle" } };
+}
+
+/** Pay debt with player-chosen demolish → facility sell → auction → bankrupt (R-017). */
 function payDebt(
   state: GameState,
   payerIndex: number,
@@ -824,30 +852,21 @@ function payDebt(
     return payExact(s, payerIndex, amount, payeeId, reason);
   }
 
-  s = demolishForCash(s, payerIndex, amount);
-  if (s.players[payerIndex]!.cash >= amount) {
-    return payExact(s, payerIndex, amount, payeeId, reason);
+  const debt: PendingDebt = {
+    amount,
+    payeeId,
+    reason,
+    debtorId: s.players[payerIndex]!.id,
+  };
+  const next = promptDebtFundraising(s, debt);
+  if (next.prompt.kind !== "idle") {
+    return pushLog(
+      next,
+      `${s.players[payerIndex]!.name} 现金不足支付 ${reason}（${amount}），请筹资`,
+    );
   }
 
-  s = sellOilMineForCash(s, payerIndex, amount);
-  if (s.players[payerIndex]!.cash >= amount) {
-    return payExact(s, payerIndex, amount, payeeId, reason);
-  }
-
-  const props = auctionableProperties(s, s.players[payerIndex]!.id);
-  if (props.length > 0) {
-    return {
-      ...s,
-      pendingDebt: {
-        amount,
-        payeeId,
-        reason,
-        debtorId: s.players[payerIndex]!.id,
-      },
-      prompt: { kind: "debtAuctionPick" },
-    };
-  }
-
+  // Nothing left to liquidate interactively — pay what remains / bankrupt.
   return payExact(s, payerIndex, amount, payeeId, reason);
 }
 
@@ -860,35 +879,115 @@ function resumePendingDebt(state: GameState): GameState {
   }
 
   if (debt.solvencyTarget != null) {
-    let s: GameState = { ...state, pendingDebt: null };
-    s = sellOilMineForCash(s, debtorIndex, debt.solvencyTarget);
-    const cash = s.players[debtorIndex]!.cash;
+    const cash = state.players[debtorIndex]!.cash;
     if (cash >= debt.solvencyTarget) {
       return pushLog(
-        { ...s, prompt: { kind: "idle" } },
-        `${s.players[debtorIndex]!.name} 已恢复最低现金 ${debt.solvencyTarget}`,
+        { ...state, pendingDebt: null, prompt: { kind: "idle" } },
+        `${state.players[debtorIndex]!.name} 已恢复最低现金 ${debt.solvencyTarget}`,
       );
     }
-    const props = auctionableProperties(s, debt.debtorId);
-    if (props.length > 0) {
-      return {
-        ...s,
-        pendingDebt: debt,
-        prompt: { kind: "debtAuctionPick" },
-      };
-    }
+    const next = promptDebtFundraising(state, debt);
+    if (next.prompt.kind !== "idle") return next;
     if (cash <= 0) {
       return declareBankrupt(
-        s,
+        { ...state, pendingDebt: null },
         debtorIndex,
         "现金耗尽且无国家地产可拍卖",
       );
     }
-    return { ...s, prompt: { kind: "idle" } };
+    return { ...state, pendingDebt: null, prompt: { kind: "idle" } };
   }
 
   const s: GameState = { ...state, pendingDebt: null };
-  return payDebt(s, debtorIndex, debt.amount, debt.payeeId, debt.reason);
+  if (s.players[debtorIndex]!.cash >= debt.amount) {
+    return continueAfterDebtChain(
+      payExact(s, debtorIndex, debt.amount, debt.payeeId, debt.reason),
+    );
+  }
+  const next = payDebt(s, debtorIndex, debt.amount, debt.payeeId, debt.reason);
+  return continueAfterDebtChain(next);
+}
+
+/** Resume 证券 flow after R-017 fundraising for entry / double-1 fees. */
+function continueAfterDebtChain(state: GameState): GameState {
+  if (
+    state.pendingDebt != null ||
+    state.prompt.kind === "debtDemolishPick" ||
+    state.prompt.kind === "debtFacilitySell" ||
+    state.prompt.kind === "debtAuctionPick" ||
+    state.prompt.kind === "auction"
+  ) {
+    return state;
+  }
+  const stage = state.pendingCasino?.stage;
+  if (!stage) return state;
+
+  const idx = state.currentPlayerIndex;
+  if (state.players[idx]!.eliminated) {
+    return settleAfterPayDebt({ ...state, pendingCasino: null });
+  }
+  return finishCasinoFeePaid(state, 200, stage);
+}
+
+function finishCasinoFeePaid(
+  state: GameState,
+  amount: number,
+  stage: "entry" | "extra",
+): GameState {
+  let s: GameState = {
+    ...state,
+    pendingCasino: null,
+    casinoPool: state.casinoPool + amount,
+  };
+  const player = s.players[s.currentPlayerIndex]!;
+  if (stage === "entry") {
+    s = pushLog(
+      s,
+      `${player.name} 支付证券入场费 ${amount} · 奖池 ${s.casinoPool}`,
+    );
+    return beginCasinoDice(s);
+  }
+  s = pushLog(s, `证券：大失败（双 1）追加 ${amount}`);
+  return settleAfterPayDebt(s);
+}
+
+/** R-017 fundraising then inject fee into 奖池 (证券). */
+function payCasinoFee(
+  state: GameState,
+  amount: number,
+  reason: string,
+  stage: "entry" | "extra",
+): GameState {
+  const idx = state.currentPlayerIndex;
+  let s = payDebt(state, idx, amount, null, reason);
+  if (s.players[idx]!.eliminated) {
+    return settleAfterPayDebt({ ...s, pendingCasino: null });
+  }
+  if (s.pendingDebt != null) {
+    return { ...s, pendingCasino: { stage } };
+  }
+  return finishCasinoFeePaid(s, amount, stage);
+}
+
+function beginCasinoDice(state: GameState): GameState {
+  const player = currentPlayer(state);
+  if (player.kind === "ai") {
+    const d1 = 1 + Math.floor(Math.random() * 6);
+    const d2 = 1 + Math.floor(Math.random() * 6);
+    return applyCasinoDice(safeCasinoState(state), d1, d2);
+  }
+  return pushLog(
+    {
+      ...safeCasinoState(state),
+      prompt: { kind: "casinoRoll", first: null },
+      lastCasinoDice: null,
+    },
+    `${player.name}请掷2次骰子参与证券结算`,
+  );
+}
+
+function safeCasinoState(state: GameState): GameState {
+  return { ...state, pendingCasino: null };
 }
 
 function isHospitalized(player: { hospitalSkips: number }): boolean {
@@ -997,11 +1096,26 @@ function creditAuctionProceeds(
 }
 
 function checkWinner(state: GameState): GameState {
+  if (state.winnerId) return state;
+  // Finish bankrupt estate auctions before declaring a winner.
+  if (state.pendingEstate != null) return state;
+
   const alive = state.players.filter((p) => !p.eliminated);
   if (alive.length === 1) {
     return pushLog(
       { ...state, winnerId: alive[0]!.id },
       `${alive[0]!.name} 获胜`,
+    );
+  }
+  if (alive.length === 0) return state;
+
+  // Solo / mixed: if every human is out, stop — do not spectate AI-only endgame.
+  const humansAlive = alive.filter((p) => p.kind === "human");
+  if (humansAlive.length === 0 && state.players.some((p) => p.kind === "human")) {
+    const winner = [...alive].sort((a, b) => b.cash - a.cash)[0]!;
+    return pushLog(
+      { ...state, winnerId: winner.id },
+      `人类玩家全部出局 · ${winner.name} 获胜`,
     );
   }
   return state;
@@ -1069,7 +1183,7 @@ export function rollDice(state: GameState): GameState {
       lastCasinoDice: null,
       phase: "settle",
     };
-    s = pushLog(s, `${player.name} 跑马场掷出 ${dice}`);
+    s = pushLog(s, `${player.name} 赌场掷出 ${dice}`);
     return racetrackAdvance(s, dice);
   }
 
@@ -1091,12 +1205,56 @@ export function rollDice(state: GameState): GameState {
   return beginTileSettlement(s);
 }
 
-/** Continue a two-die human roll (track judge / casino) — one die per click. */
+/** E11 back / E12 forward after the player (or AI) has rolled 1d6. */
+function applyEventRingMove(
+  state: GameState,
+  direction: "back" | "forward",
+  steps: number,
+): GameState {
+  const idx = state.currentPlayerIndex;
+  const player = currentPlayer(state);
+  const from = player.position;
+  const n = Math.max(1, Math.min(6, Math.round(steps)));
+
+  if (direction === "back") {
+    const to = (from - n + BOARD_TILE_COUNT) % BOARD_TILE_COUNT;
+    let s: GameState = {
+      ...mapPlayer(state, idx, { position: to }),
+      lastDice: n,
+      prompt: { kind: "idle" },
+    };
+    s = pushLog(
+      s,
+      `${player.name} 后退 ${n} 格至 ${s.tiles[to]!.zh}（逆时针不领薪）`,
+    );
+    s = applyPortVisitBonusesAlongMove(s, idx, from, n, false);
+    return beginTileSettlement(s);
+  }
+
+  const to = (from + n) % BOARD_TILE_COUNT;
+  let s: GameState = {
+    ...mapPlayer(state, idx, { position: to }),
+    lastDice: n,
+    prompt: { kind: "idle" },
+  };
+  s = pushLog(s, `${player.name} 加速前进 ${n} 格至 ${s.tiles[to]!.zh}`);
+  s = applyGoSalary(s, idx, from, n, to);
+  s = applyPortVisitBonusesAlongMove(s, idx, from, n, true);
+  return beginTileSettlement(s);
+}
+
+/** Continue a two-die human roll (track judge / casino) — one die per click.
+ *  Also resolves E11/E12 eventMove (1d6) for humans, and as an AI safety net. */
 export function continuePairRoll(state: GameState): GameState {
   if (state.winnerId) return state;
   const player = currentPlayer(state);
-  if (player.kind !== "human") return state;
   const die = 1 + Math.floor(Math.random() * 6);
+
+  if (state.phase === "settle" && state.prompt.kind === "eventMove") {
+    return applyEventRingMove(state, state.prompt.direction, die);
+  }
+
+  if (player.kind !== "human") return state;
 
   if (state.phase === "settle" && state.prompt.kind === "trackJudge") {
     const { first, pos, depth } = state.prompt;
@@ -1159,8 +1317,8 @@ function beginTileSettlement(state: GameState): GameState {
   if (tile.kind === "event") {
     return drawAndResolveEvent(state);
   }
-  if (tile.kind === "mafia") {
-    return settleMafiaEntrance(state);
+  if (tile.kind === "casinoEntrance") {
+    return settleCasinoEntrance(state);
   }
 
   return { ...state, prompt: { kind: "idle" } };
@@ -1216,21 +1374,21 @@ function settlePort(state: GameState, tile: BoardTile): GameState {
   );
 }
 
-function settleMafiaEntrance(state: GameState): GameState {
+function settleCasinoEntrance(state: GameState): GameState {
   const player = currentPlayer(state);
-  if (player.skipNextMafiaEnter) {
+  if (player.skipNextCasinoEnter) {
     return pushLog(
       {
         ...mapPlayer(state, state.currentPlayerIndex, {
-          skipNextMafiaEnter: false,
+          skipNextCasinoEnter: false,
         }),
         prompt: { kind: "idle" },
       },
-      `${player.name} 从跑马场回到赌城入口`,
+      `${player.name} 从赌场回到赌城入口`,
     );
   }
   if (player.hasVipCard) {
-    return { ...state, prompt: { kind: "mafiaEnter" } };
+    return { ...state, prompt: { kind: "casinoEnter" } };
   }
   return enterRacetrack(state);
 }
@@ -1240,12 +1398,26 @@ function enterRacetrack(state: GameState): GameState {
   let s = mapPlayer(state, state.currentPlayerIndex, { racetrackPos: 0 });
   s = pushLog(
     s,
-    `${player.name} 进入跑马场（起终点）· 本回合必须立刻前进`,
+    `${player.name} 进入赌场，停在起终点 · 本回合须掷骰离开起点`,
   );
-  const dice = 1 + Math.floor(Math.random() * 6);
-  s = { ...s, lastDice: dice, phase: "settle" };
-  s = pushLog(s, `${player.name} 进场掷出 ${dice}`);
-  return racetrackAdvance(s, dice);
+
+  // AI: still leave start immediately on the entry turn.
+  if (player.kind === "ai") {
+    const dice = 1 + Math.floor(Math.random() * 6);
+    s = { ...s, lastDice: dice, phase: "settle", prompt: { kind: "idle" } };
+    s = pushLog(s, `${player.name} 进场掷出 ${dice}`);
+    return racetrackAdvance(s, dice);
+  }
+
+  // Human: stand on start first, then click 掷骰 to leave (R-031).
+  return {
+    ...s,
+    phase: "roll",
+    prompt: { kind: "idle" },
+    lastDice: null,
+    lastTrackDice: null,
+    lastCasinoDice: null,
+  };
 }
 
 function racetrackAdvance(state: GameState, steps: number): GameState {
@@ -1267,7 +1439,7 @@ function racetrackAdvance(state: GameState, steps: number): GameState {
   const kind = trackCellKind(moved.pos);
   s = pushLog(
     s,
-    `${player.name} 停在跑马场 ${moved.pos} 格（${trackCellZh(kind)}）`,
+    `${player.name} 停在赌场 ${moved.pos} 格（${trackCellZh(kind)}）`,
   );
   return resolveTrackCell(s, moved.pos, 0);
 }
@@ -1319,17 +1491,20 @@ function applyTrackJudge(
   };
   const player = currentPlayer(s);
   const kind = trackCellKind(pos);
-  s = pushLog(s, `跑马场判定 ${d1}−${d2}=${d}`);
+  s = pushLog(s, `赌场判定 ${d1}−${d2}=${d}`);
 
   if (kind === "money") {
     const amount = d * 40;
     if (amount > 0) {
-      s = gainCash(s, s.currentPlayerIndex, amount, "跑马场钞票");
+      s = gainCash(s, s.currentPlayerIndex, amount, "赌场钞票");
       return { ...s, prompt: { kind: "idle" } };
     }
     if (amount < 0) {
-      s = payDebt(s, s.currentPlayerIndex, -amount, null, "跑马场钞票");
-      return s.prompt.kind === "debtAuctionPick" || s.prompt.kind === "auction"
+      s = payDebt(s, s.currentPlayerIndex, -amount, null, "赌场钞票");
+      return s.prompt.kind === "debtDemolishPick" ||
+        s.prompt.kind === "debtFacilitySell" ||
+        s.prompt.kind === "debtAuctionPick" ||
+        s.prompt.kind === "auction"
         ? s
         : { ...s, prompt: { kind: "idle" } };
     }
@@ -1406,8 +1581,8 @@ export function gunDemolishOptions(
   });
 }
 
-export function cancelMafiaEnter(state: GameState): GameState {
-  if (state.phase !== "settle" || state.prompt.kind !== "mafiaEnter") {
+export function cancelCasinoEnter(state: GameState): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "casinoEnter") {
     return state;
   }
   const player = currentPlayer(state);
@@ -1418,11 +1593,11 @@ export function cancelMafiaEnter(state: GameState): GameState {
     eventDeck: discardEventCard(s.eventDeck, "H3"),
     prompt: { kind: "idle" },
   };
-  return pushLog(s, `${player.name} 弃置赌场VIP卡，取消进入跑马场`);
+  return pushLog(s, `${player.name} 弃置赌场VIP卡，取消进入赌场`);
 }
 
-export function acceptMafiaEnter(state: GameState): GameState {
-  if (state.phase !== "settle" || state.prompt.kind !== "mafiaEnter") {
+export function acceptCasinoEnter(state: GameState): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "casinoEnter") {
     return state;
   }
   return enterRacetrack(state);
@@ -1488,6 +1663,13 @@ export function skipGunEffect(state: GameState): GameState {
   ) {
     return state;
   }
+  // Demolish is mandatory when any valid target exists.
+  if (
+    state.prompt.kind === "racetrackGunDemolish" &&
+    gunDemolishOptions(state, currentPlayer(state).id).length > 0
+  ) {
+    return state;
+  }
   return pushLog(
     { ...state, prompt: { kind: "idle" } },
     `${currentPlayer(state).name} 跳过老虎机效果`,
@@ -1496,26 +1678,26 @@ export function skipGunEffect(state: GameState): GameState {
 
 export function chooseRacetrackExit(
   state: GameState,
-  mafiaTileIndex: number,
+  entranceTileIndex: number,
 ): GameState {
   if (state.phase !== "settle" || state.prompt.kind !== "racetrackExit") {
     return state;
   }
-  const tile = state.tiles[mafiaTileIndex];
-  if (!tile || tile.kind !== "mafia") return state;
+  const tile = state.tiles[entranceTileIndex];
+  if (!tile || tile.kind !== "casinoEntrance") return state;
 
   const player = currentPlayer(state);
   let s = mapPlayer(state, state.currentPlayerIndex, {
-    position: mafiaTileIndex,
+    position: entranceTileIndex,
     racetrackPos: null,
-    skipNextMafiaEnter: true,
+    skipNextCasinoEnter: true,
   });
   s = pushLog(s, `${player.name} 离场回到 ${tile.zh}`);
   return beginTileSettlement(s);
 }
 
-export function mafiaEntrances(state: GameState): BoardTile[] {
-  return state.tiles.filter((t) => t.kind === "mafia");
+export function casinoEntrances(state: GameState): BoardTile[] {
+  return state.tiles.filter((t) => t.kind === "casinoEntrance");
 }
 
 function settleOwnable(state: GameState, tile: BoardTile): GameState {
@@ -1687,29 +1869,7 @@ function admitHospital(state: GameState): GameState {
 }
 
 function resolveCasino(state: GameState): GameState {
-  const playerIndex = state.currentPlayerIndex;
-  const player = state.players[playerIndex]!;
-  const entry = 200;
-  const paid = Math.min(player.cash, entry);
-
-  let s = mapPlayer(state, playerIndex, { cash: player.cash - paid });
-  s = { ...s, casinoPool: s.casinoPool + paid };
-
-  if (paid < entry) {
-    return declareBankrupt(s, playerIndex, "无力支付证券入场费");
-  }
-
-  s = pushLog(s, `${player.name} 支付证券入场费 200 · 奖池 ${s.casinoPool}`);
-
-  if (player.kind === "ai") {
-    const d1 = 1 + Math.floor(Math.random() * 6);
-    const d2 = 1 + Math.floor(Math.random() * 6);
-    return applyCasinoDice(s, d1, d2);
-  }
-  return pushLog(
-    { ...s, prompt: { kind: "casinoRoll", first: null }, lastCasinoDice: null },
-    `${player.name}请掷2次骰子参与证券结算`,
-  );
+  return payCasinoFee(state, 200, "证券入场费", "entry");
 }
 
 function applyCasinoDice(state: GameState, d1: number, d2: number): GameState {
@@ -1720,16 +1880,9 @@ function applyCasinoDice(state: GameState, d1: number, d2: number): GameState {
   s = pushLog(s, `${player.name} 证券掷出 ${d1}+${d2}=${sum}`);
 
   if (d1 === 1 && d2 === 1) {
-    const extra = Math.min(s.players[playerIndex]!.cash, 200);
-    s = mapPlayer(s, playerIndex, {
-      cash: s.players[playerIndex]!.cash - extra,
-    });
-    s = { ...s, casinoPool: s.casinoPool + extra };
-    if (extra < 200) {
-      return declareBankrupt(s, playerIndex, "证券：大失败（双 1）");
-    }
-    s = pushLog(s, "证券：大失败（双 1）追加 200");
-  } else if (d1 === 6 && d2 === 6) {
+    return payCasinoFee(s, 200, "证券大失败追加", "extra");
+  }
+  if (d1 === 6 && d2 === 6) {
     const win = s.casinoPool;
     s = { ...s, casinoPool: 0 };
     s = gainCash(s, playerIndex, win, "证券大成功取走奖池");
@@ -1858,6 +2011,8 @@ function resolveInstant(state: GameState, card: EventCardId): GameState {
         if (i === idx || s.players[i]!.eliminated) continue;
         s = payDebt(s, i, 50, player.id, "生日礼金");
         if (
+          s.prompt.kind === "debtDemolishPick" ||
+          s.prompt.kind === "debtFacilitySell" ||
           s.prompt.kind === "debtAuctionPick" ||
           s.prompt.kind === "auction" ||
           s.pendingEstate != null ||
@@ -1873,6 +2028,8 @@ function resolveInstant(state: GameState, card: EventCardId): GameState {
         if (i === idx || s.players[i]!.eliminated) continue;
         s = payDebt(s, idx, 50, s.players[i]!.id, "董事长分红");
         if (
+          s.prompt.kind === "debtDemolishPick" ||
+          s.prompt.kind === "debtFacilitySell" ||
           s.prompt.kind === "debtAuctionPick" ||
           s.prompt.kind === "auction" ||
           s.pendingEstate != null ||
@@ -1885,26 +2042,32 @@ function resolveInstant(state: GameState, card: EventCardId): GameState {
       return { ...s, prompt: { kind: "idle" } };
     }
     case "E11": {
-      const back = 1 + Math.floor(Math.random() * 6);
-      const from = player.position;
-      const to = (from - back + BOARD_TILE_COUNT) % BOARD_TILE_COUNT;
-      s = mapPlayer(s, idx, { position: to });
-      s = pushLog(
-        s,
-        `${player.name} 后退 ${back} 格至 ${s.tiles[to]!.zh}（逆时针不领薪）`,
+      if (player.kind === "ai") {
+        const back = 1 + Math.floor(Math.random() * 6);
+        return applyEventRingMove(s, "back", back);
+      }
+      return pushLog(
+        {
+          ...s,
+          prompt: { kind: "eventMove", direction: "back" },
+          lastDice: null,
+        },
+        `${player.name}请掷 1 次骰子决定后退格数`,
       );
-      s = applyPortVisitBonusesAlongMove(s, idx, from, back, false);
-      return beginTileSettlement(s);
     }
     case "E12": {
-      const fwd = 1 + Math.floor(Math.random() * 6);
-      const from = player.position;
-      const to = (from + fwd) % BOARD_TILE_COUNT;
-      s = mapPlayer(s, idx, { position: to });
-      s = pushLog(s, `${player.name} 加速前进 ${fwd} 格至 ${s.tiles[to]!.zh}`);
-      s = applyGoSalary(s, idx, from, fwd, to);
-      s = applyPortVisitBonusesAlongMove(s, idx, from, fwd, true);
-      return beginTileSettlement(s);
+      if (player.kind === "ai") {
+        const fwd = 1 + Math.floor(Math.random() * 6);
+        return applyEventRingMove(s, "forward", fwd);
+      }
+      return pushLog(
+        {
+          ...s,
+          prompt: { kind: "eventMove", direction: "forward" },
+          lastDice: null,
+        },
+        `${player.name}请掷 1 次骰子决定前进格数`,
+      );
     }
     case "E13":
       return { ...s, prompt: { kind: "freeFlight" } };
@@ -2692,6 +2855,38 @@ export function pickDebtAuctionTile(
   return startAuction(state, tileIndex, "debt");
 }
 
+export function pickDebtDemolishTile(
+  state: GameState,
+  tileIndex: number,
+): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "debtDemolishPick") {
+    return state;
+  }
+  const debt = state.pendingDebt;
+  if (!debt) return state;
+  const debtorIndex = findPlayerIndex(state, debt.debtorId);
+  if (debtorIndex < 0) return state;
+  const next = demolishOneHouse(state, debtorIndex, tileIndex);
+  if (!next) return state;
+  return resumePendingDebt(next);
+}
+
+export function pickDebtFacilitySell(
+  state: GameState,
+  tileIndex: number,
+): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "debtFacilitySell") {
+    return state;
+  }
+  const debt = state.pendingDebt;
+  if (!debt) return state;
+  const debtorIndex = findPlayerIndex(state, debt.debtorId);
+  if (debtorIndex < 0) return state;
+  const next = sellOneFacilityOrPort(state, debtorIndex, tileIndex);
+  if (!next) return state;
+  return resumePendingDebt(next);
+}
+
 export function auctionBid(state: GameState, amount?: number): GameState {
   if (
     state.phase !== "settle" ||
@@ -2769,14 +2964,14 @@ export function swapWith(state: GameState, otherId: string): GameState {
   if (state.phase !== "settle" || state.prompt.kind !== "swap") return state;
   const me = currentPlayer(state);
   if (me.racetrackPos != null) {
-    return pushLog(state, "你在跑马场内，不能换位");
+    return pushLog(state, "你在赌场内，不能换位");
   }
   const otherIndex = findPlayerIndex(state, otherId);
   if (otherIndex < 0) return state;
   const other = state.players[otherIndex]!;
   if (other.eliminated || other.id === me.id) return state;
   if (other.racetrackPos != null) {
-    return pushLog(state, "不能与跑马场内的玩家换位");
+    return pushLog(state, "不能与赌场内的玩家换位");
   }
 
   const myPos = me.position;
@@ -2809,6 +3004,8 @@ export function finishSettlement(state: GameState): GameState {
   if (state.prompt.kind !== "idle") return state;
   let s = enforceMinSolvency(state, state.currentPlayerIndex);
   if (
+    s.prompt.kind === "debtDemolishPick" ||
+    s.prompt.kind === "debtFacilitySell" ||
     s.prompt.kind === "debtAuctionPick" ||
     s.pendingDebt != null ||
     s.pendingEstate != null ||
@@ -2861,6 +3058,16 @@ export function ownedPropertiesForCurrent(state: GameState): BoardTile[] {
 export function ownedPropertiesForDebtor(state: GameState): BoardTile[] {
   if (!state.pendingDebt) return [];
   return ownedCountryProperties(state, state.pendingDebt.debtorId);
+}
+
+export function demolishOptionsForDebtor(state: GameState): BoardTile[] {
+  if (!state.pendingDebt) return [];
+  return demolishableProperties(state, state.pendingDebt.debtorId);
+}
+
+export function facilitySellOptionsForDebtor(state: GameState): BoardTile[] {
+  if (!state.pendingDebt) return [];
+  return sellableFacilitiesAndPorts(state, state.pendingDebt.debtorId);
 }
 
 export type { SpecialKind, DeedState, EventCardId, AuctionState };

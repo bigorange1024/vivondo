@@ -1,10 +1,10 @@
-/** Ring board geometry — matches assets/render_board_v7.py */
+﻿/** Ring board geometry — matches assets/render_board_v7.py */
 
 export type TileKind =
   | "corner"
   | "property"
   | "event"
-  | "mafia"
+  | "casinoEntrance"
   | "facility"
   | "port";
 
@@ -41,7 +41,7 @@ const TOP: SideSpec[] = [
   ["port", "利物浦港", "Port of Liverpool", 1000],
   ["property", "法国", "France", 560, 70, "europe"],
   ["property", "意大利", "Italy", 440, 55, "europe"],
-  ["mafia", "蒙特卡洛赌城", "Monte Carlo"],
+  ["casinoEntrance", "蒙特卡洛赌城", "Monte Carlo"],
   ["event", "事件", "Event"],
   ["property", "埃及", "Egypt", 240, 30, "africa"],
   ["property", "摩洛哥", "Morocco", 210, 25, "africa"],
@@ -67,7 +67,7 @@ const BOTTOM: SideSpec[] = [
   ["port", "哈利法克斯港", "Port of Halifax", 1000],
   ["property", "加拿大", "Canada", 520, 65, "na"],
   ["property", "美国", "USA", 600, 75, "na"],
-  ["mafia", "拉斯维加斯赌城", "Las Vegas"],
+  ["casinoEntrance", "拉斯维加斯赌城", "Las Vegas"],
   ["event", "事件", "Event"],
   ["property", "新西兰", "New Zealand", 400, 50, "oceania"],
   ["property", "澳大利亚", "Australia", 510, 65, "oceania"],

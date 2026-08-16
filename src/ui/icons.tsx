@@ -1,4 +1,4 @@
-/** Compact SVG icons for HUD inventory / location. */
+﻿/** Compact SVG icons for HUD inventory / location. */
 
 type IconProps = { className?: string; title?: string };
 
@@ -54,14 +54,30 @@ export function IconHouse({ className, title }: IconProps) {
   );
 }
 
-/** Industry special — factory silhouette. */
+/** Industry special — factory silhouette (sawtooth roof + chimney). */
 export function IconFactory({ className, title }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 16 16" aria-hidden={!title}>
       {title ? <title>{title}</title> : null}
+      {/* Ground */}
+      <rect x="0.85" y="13.45" width="14.3" height="1.4" fill="currentColor" />
+      {/* Rear roof block (2 small peaks) */}
       <path
         fill="currentColor"
-        d="M1.5 14V7.2l3.2-1.6v1.4L8 5.2V14H1.5zm7.2 0V6.5l2.2-1.2V7l2.6-1.4V14H8.7zM3.2 2.2h1.4v2.2H3.2V2.2zm2.4 0h1.4v2.2H5.6V2.2z"
+        d="M2.45 5.35V3.45L3.4 2.55V3.4L4.4 2.55V5.35z"
+      />
+      {/* Front hall: 3 rising sawteeth + door cutouts */}
+      <path
+        fill="currentColor"
+        fillRule="evenodd"
+        d="M1.15 13.45V7.5L2.9 5.5V7.1L4.7 5.15V6.75L6.7 4.45V13.45H1.15ZM2.2 7.85h1.1v4.15H2.2Zm1.75 0h1.1v4.15H3.95Zm1.75 0h1.1v4.15H5.7Z"
+      />
+      {/* Chimney (taper), flush with hall */}
+      <path fill="currentColor" d="M6.7 13.45V1.75h1.4l2.05 1.25V13.45H6.7z" />
+      {/* Side pipe / arch */}
+      <path
+        fill="currentColor"
+        d="M10.7 9.7c1.4.25 2.25 1.4 1.8 2.65-.3.85-1.15 1.3-2.1 1.3H9.15v-1.2h.95c.42 0 .72-.32.8-.6.12-.5-.2-.92-.72-1.02l-.48-.1V9.7z"
       />
     </svg>
   );
@@ -109,10 +125,6 @@ export function IconDischarge({ className, title }: IconProps) {
       <path fill="currentColor" d="M7.2 4.2h1.6v2.8h2.8v1.6H8.8v2.8H7.2V8.6H4.4V7h2.8z" />
     </svg>
   );
-}
-
-export function IconMafia({ className, title }: IconProps) {
-  return <IconVipCard className={className} title={title} />;
 }
 
 /** Casino VIP holdable card. */
@@ -333,18 +345,6 @@ export function IconMine({ className, title }: IconProps) {
   );
 }
 
-export function IconTrack({ className, title }: IconProps) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" aria-hidden={!title}>
-      {title ? <title>{title}</title> : null}
-      <path
-        fill="currentColor"
-        d="M1.3 6.7 0.3 4.5 0.6 5.8 1.9 7.7 2.9 6.4 5.1 5.8 7.7 5.4 9.3 5.8 10.6 4.5 11.5 2.9 11.8 1.6 12.5 2.9 13.1 3.2 14.7 4.5 15.7 5.4 15.4 6.4 14.1 6.1 12.8 5.8 11.5 6.4 10.6 7.7 9.9 9 10.2 9 11.2 12.5 10.9 14.1 9.9 14.1 9.3 11.5 9 9.3 8.6 9.3 8.3 12.5 7.7 14.1 7 14.1 7.4 11.5 7.7 9.3 6.4 9.6 4.5 9.6 4.2 9.6 3.5 12.5 2.9 14.4 1.9 14.4 2.6 11.8 3.2 9.6 2.9 9.3 1.9 12.2 1.3 14.1 0.6 14.1 1.3 11.5 2.2 8.6 2.6 7.7 1.9 7z"
-      />
-    </svg>
-  );
-}
-
 export function IconProperty({ className, title }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 16 16" aria-hidden={!title}>
@@ -354,7 +354,7 @@ export function IconProperty({ className, title }: IconProps) {
   );
 }
 
-export function IconMafiaTile({ className, title }: IconProps) {
+export function IconCasinoEntranceTile({ className, title }: IconProps) {
   return <IconPoker className={className} title={title} />;
 }
 

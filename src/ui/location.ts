@@ -1,4 +1,4 @@
-import type { BoardTile } from "../engine/board";
+﻿import type { BoardTile } from "../engine/board";
 import type { ComponentType } from "react";
 import {
   IconAirport,
@@ -12,7 +12,6 @@ import {
   IconPoker,
   IconPort,
   IconProperty,
-  IconTrack,
 } from "./icons";
 
 type IconComp = ComponentType<{ className?: string; title?: string }>;
@@ -61,10 +60,10 @@ export function locationView(
 ): LocationView {
   if (racetrackPos != null) {
     return {
-      zh: "跑马场",
-      code: "TRK",
-      en: "Track",
-      Icon: IconTrack,
+      zh: "赌场",
+      code: "CAS",
+      en: "Casino",
+      Icon: IconPoker,
     };
   }
   if (!tile) {
@@ -105,7 +104,7 @@ export function locationView(
   if (tile.kind === "event") {
     return { zh: "事件", code: "EVT", en: "Event", Icon: IconEvent };
   }
-  if (tile.kind === "mafia") {
+  if (tile.kind === "casinoEntrance") {
     if (tile.zh.includes("蒙特卡洛") || tile.en.includes("Monte")) {
       return {
         zh: "蒙特卡洛赌城",
@@ -124,7 +123,7 @@ export function locationView(
     }
     return { zh: tile.zh, code: "VIP", en: tile.en, Icon: IconPoker };
   }
-    if (tile.kind === "port") {
+  if (tile.kind === "port") {
     return {
       zh: tile.zh,
       code: tile.zh.includes("利物浦") ? "LPL" : "HFX",

@@ -115,6 +115,11 @@ function reshuffleRemaining(deck: EventDeckState): EventDeckState {
   return { ...deck, drawPile };
 }
 
+/** Re-randomize draw pile order (e.g. after load). Discard pile unchanged. */
+export function reshuffleDrawPile(deck: EventDeckState): EventDeckState {
+  return reshuffleRemaining(deck);
+}
+
 /** Draw top card; reshuffle discard into draw if empty; then shuffle remaining draw pile. */
 export function drawEventCard(deck: EventDeckState): {
   card: EventCardId;

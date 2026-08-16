@@ -1,0 +1,5 @@
+# Local game saves (slot-1.json – slot-9.json). Keep this folder.
+*
+!.gitignore
+!.gitkeep
+!README.md

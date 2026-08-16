@@ -129,7 +129,7 @@ def main():
         dest = OUT / f"{name}.png"
         icon.save(dest)
         print(f"{name}: {src.name[-40:]} -> {dest.name} {icon.size}")
-    # also bake dark variants for track icons that need invert
+    # dark variants for track icons on black cells
     for name in ("horse-head", "cash", "slot"):
         inv = invert_for_dark(Image.open(OUT / f"{name}.png").convert("RGBA"))
         inv.save(OUT / f"{name}-dark.png")

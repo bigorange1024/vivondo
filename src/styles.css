@@ -93,6 +93,77 @@ body {
   border-radius: 0 0 4px 4px;
 }
 
+.board-top-strip .top-menu,
+.board-top-strip .top-menu-btn,
+.board-top-strip .event-deck-meta {
+  pointer-events: auto;
+}
+
+.top-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--board-scale) * 4px);
+  flex: 1 1 auto;
+  justify-content: center;
+  min-width: 0;
+}
+
+.top-menu-btn {
+  appearance: none;
+  border: 1px solid #8a7355;
+  background: #f3ebe0;
+  color: #3a2a18;
+  font: inherit;
+  font-size: calc(var(--board-scale) * 11px);
+  font-weight: 700;
+  padding: calc(var(--board-scale) * 2px) calc(var(--board-scale) * 8px);
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.top-menu-btn:hover {
+  background: #fff8ef;
+}
+
+.event-deck-meta {
+  position: relative;
+  cursor: help;
+  border-bottom: 1px dotted rgba(63, 79, 95, 0.55);
+}
+
+.event-deck-tip {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  min-width: calc(var(--board-scale) * 140px);
+  max-width: min(280px, 70vw);
+  max-height: min(50vh, 320px);
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 4px;
+  border: 1px solid #7a6548;
+  background: rgba(246, 239, 228, 0.98);
+  color: #3a2a18;
+  font-size: calc(var(--board-scale) * 11px);
+  font-weight: 600;
+  line-height: 1.35;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+  text-align: left;
+  white-space: normal;
+}
+
+.event-deck-tip > span {
+  display: block;
+}
+
+.event-deck-meta:hover .event-deck-tip,
+.event-deck-meta:focus-within .event-deck-tip {
+  display: block;
+}
+
 .brand {
   display: flex;
   align-items: baseline;
@@ -426,7 +497,7 @@ body {
   width: 100%;
 }
 
-/* 跑马场离场：两入口左右等宽 */
+/* 赌场离场：两入口左右等宽 */
 .actions.exit-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -535,11 +606,35 @@ body {
   font-weight: 700;
   font-size: calc(var(--board-scale) * 15px);
   line-height: 1.15;
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pfacilities {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--board-scale) * 2px);
+  flex: 0 0 auto;
+}
+
+.pfac {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--board-scale) * 16px);
+  height: calc(var(--board-scale) * 16px);
+  border-radius: 3px;
+  background: rgba(40, 110, 200, 0.12);
+  color: #1f4f8a;
+  border: 1px solid rgba(40, 110, 200, 0.35);
+}
+
+.pfac-ico {
+  width: calc(var(--board-scale) * 12px);
+  height: calc(var(--board-scale) * 12px);
 }
 
 .pcash {
@@ -547,6 +642,7 @@ body {
   font-size: calc(var(--board-scale) * 15px);
   font-weight: 700;
   flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .ppos {
@@ -879,3 +975,241 @@ button:disabled:hover {
 .money-n {
   font-weight: inherit;
 }
+
+/* —— Setup / save / confirm —— */
+.setup-screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(ellipse at 30% 20%, rgba(255, 248, 236, 0.9), transparent 55%),
+    linear-gradient(160deg, #c4b49a 0%, #a89070 45%, #8f7858 100%);
+}
+
+.setup-card {
+  width: min(420px, 100%);
+  background: #f6efe4;
+  border: 2px solid #7a6548;
+  border-radius: 8px;
+  padding: 28px 26px 22px;
+  box-shadow: 0 12px 32px rgba(40, 28, 12, 0.28);
+}
+
+.setup-brand h1 {
+  margin: 0;
+  font-size: 2rem;
+  color: #3a2a18;
+  letter-spacing: 0.04em;
+}
+
+.setup-en {
+  margin: 2px 0 0;
+  color: #5c6b7a;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+}
+
+.setup-lead {
+  margin: 16px 0 20px;
+  color: #4a3a28;
+  font-size: 0.95rem;
+}
+
+.setup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-weight: 700;
+  color: #3a2a18;
+}
+
+.setup-stepper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.setup-stepper button {
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
+  border: 1px solid #8a7355;
+  background: #efe4d4;
+  font-size: 1.2rem;
+  font-weight: 700;
+  cursor: pointer;
+  color: #3a2a18;
+}
+
+.setup-stepper button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.setup-stepper span {
+  min-width: 1.5rem;
+  text-align: center;
+  font-size: 1.25rem;
+}
+
+.setup-total {
+  margin: 8px 0 18px;
+  color: #4a3a28;
+}
+
+.setup-error {
+  color: #a02828;
+  font-weight: 700;
+}
+
+.setup-start {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 1.05rem;
+  font-weight: 800;
+  border: none;
+  border-radius: 4px;
+  background: #286ec8;
+  color: #fff;
+  cursor: pointer;
+}
+
+.setup-start:disabled {
+  background: #9aabbc;
+  cursor: not-allowed;
+}
+
+.setup-persist {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.setup-persist button {
+  flex: 1;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(30, 22, 12, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.modal-card {
+  width: min(420px, 100%);
+  background: #f6efe4;
+  border: 2px solid #7a6548;
+  border-radius: 8px;
+  padding: 20px 18px 16px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.modal-card h2 {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+  color: #3a2a18;
+}
+
+.modal-card p {
+  margin: 0 0 14px;
+  color: #4a3a28;
+  font-size: 0.95rem;
+}
+
+.modal-hint {
+  font-size: 0.85rem !important;
+  color: #667788 !important;
+}
+
+.modal-error {
+  color: #a02828 !important;
+  font-weight: 700;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+button.danger {
+  background: #c83737;
+  color: #fff;
+  border-color: #9a2222;
+}
+
+.save-slot-modal {
+  width: min(480px, 100%);
+}
+
+.save-slot-list {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(50vh, 360px);
+  overflow: auto;
+}
+
+.save-slot-btn {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid #8a7355;
+  border-radius: 4px;
+  background: #efe4d4;
+  cursor: pointer;
+  font: inherit;
+  color: #3a2a18;
+}
+
+.save-slot-btn.filled {
+  background: #e8f0fa;
+  border-color: #5a7aa0;
+}
+
+.save-slot-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.save-slot-num {
+  font-weight: 800;
+  min-width: 2rem;
+}
+
+.save-slot-meta {
+  font-size: 0.88rem;
+  color: #4a5560;
+}
+
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 220;
+  background: #2d3a48;
+  color: #f5f0e8;
+  padding: 10px 18px;
+  border-radius: 6px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+

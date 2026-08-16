@@ -1,6 +1,6 @@
-import {
+﻿import {
   acceptHospital,
-  acceptMafiaEnter,
+  acceptCasinoEnter,
   airportBeginFly,
   airportFlyTo,
   airportStay,
@@ -10,7 +10,7 @@ import {
   auctionDoPass,
   cancelAirportDest,
   cancelForceAuction,
-  cancelMafiaEnter,
+  cancelCasinoEnter,
   chooseBuy,
   chooseRacetrackExit,
   chooseUpgrade,
@@ -27,10 +27,14 @@ import {
   gunDemolishOptions,
   initiativeActorId,
   keepFacility,
-  mafiaEntrances,
+  casinoEntrances,
   ownedPropertiesForCurrent,
   ownedPropertiesForDebtor,
+  demolishOptionsForDebtor,
+  facilitySellOptionsForDebtor,
   pickDebtAuctionTile,
+  pickDebtDemolishTile,
+  pickDebtFacilitySell,
   pickForceAuctionTile,
   pickGunBuild,
   pickGunDemolish,
@@ -52,6 +56,7 @@ import {
   type GameState,
   type SpecialKind,
 } from "../engine/game";
+import { reshuffleDrawPile } from "../engine/deck";
 
 export interface GameSession {
   readonly kind: "solo" | "hotseat" | "online";
@@ -83,19 +88,23 @@ export interface GameSession {
   proceedForceAuction(): void;
   pickForceAuctionTile(tileIndex: number): void;
   pickDebtAuctionTile(tileIndex: number): void;
+  pickDebtDemolishTile(tileIndex: number): void;
+  pickDebtFacilitySell(tileIndex: number): void;
   auctionBid(amount?: number): void;
   auctionBuyout(): void;
   auctionPass(): void;
-  cancelMafiaEnter(): void;
-  acceptMafiaEnter(): void;
+  cancelCasinoEnter(): void;
+  acceptCasinoEnter(): void;
   pickGunBuild(tileIndex: number): void;
   pickGunDemolish(tileIndex: number): void;
   skipGunEffect(): void;
   chooseRacetrackExit(tileIndex: number): void;
   skipSwap(): void;
   swapWith(otherId: string): void;
-  save?(): string;
-  load?(raw: string): void;
+  /** Serialize current board for persist layer. */
+  exportState(): GameState;
+  /** Restore a full board snapshot (stops AI, then may resume AI turn). */
+  importState(next: GameState): void;
 }
 
 function aiPickAirportDest(
@@ -310,6 +319,23 @@ function aiResolveSettle(state: GameState): GameState {
       continue;
     }
 
+    if (s.prompt.kind === "debtDemolishPick") {
+      const props = demolishOptionsForDebtor(s).sort(
+        (a, b) =>
+          (s.deeds[b.index]?.houses ?? 0) - (s.deeds[a.index]?.houses ?? 0),
+      );
+      if (!props[0]) s = { ...s, prompt: { kind: "idle" }, pendingDebt: null };
+      else s = pickDebtDemolishTile(s, props[0].index);
+      continue;
+    }
+
+    if (s.prompt.kind === "debtFacilitySell") {
+      const props = facilitySellOptionsForDebtor(s);
+      if (!props[0]) s = { ...s, prompt: { kind: "idle" }, pendingDebt: null };
+      else s = pickDebtFacilitySell(s, props[0].index);
+      continue;
+    }
+
     if (s.prompt.kind === "debtAuctionPick") {
       const props = ownedPropertiesForDebtor(s).sort(
         (a, b) => (a.price ?? 0) - (b.price ?? 0),
@@ -324,8 +350,13 @@ function aiResolveSettle(state: GameState): GameState {
       continue;
     }
 
-    if (s.prompt.kind === "mafiaEnter") {
-      s = player.hasVipCard ? cancelMafiaEnter(s) : acceptMafiaEnter(s);
+    if (s.prompt.kind === "eventMove") {
+      s = continuePairRoll(s);
+      continue;
+    }
+
+    if (s.prompt.kind === "casinoEnter") {
+      s = player.hasVipCard ? cancelCasinoEnter(s) : acceptCasinoEnter(s);
       continue;
     }
 
@@ -344,7 +375,7 @@ function aiResolveSettle(state: GameState): GameState {
     }
 
     if (s.prompt.kind === "racetrackExit") {
-      const entrances = mafiaEntrances(s);
+      const entrances = casinoEntrances(s);
       s = entrances[0]
         ? chooseRacetrackExit(s, entrances[0].index)
         : { ...s, prompt: { kind: "idle" } };
@@ -651,7 +682,8 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       if (
         state.phase === "settle" &&
         (state.prompt.kind === "trackJudge" ||
-          state.prompt.kind === "casinoRoll")
+          state.prompt.kind === "casinoRoll" ||
+          state.prompt.kind === "eventMove")
       ) {
         const p = state.players[state.currentPlayerIndex]!;
         if (p.kind !== "human") return;
@@ -765,7 +797,12 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     declineRentFree() {
       state = declineRentFree(state);
       emit();
-      if (state.prompt.kind === "debtAuctionPick" || state.prompt.kind === "auction") {
+      if (
+        state.prompt.kind === "debtDemolishPick" ||
+        state.prompt.kind === "debtFacilitySell" ||
+        state.prompt.kind === "debtAuctionPick" ||
+        state.prompt.kind === "auction"
+      ) {
         void runAiIfNeeded();
       }
     },
@@ -780,6 +817,30 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     pickForceAuctionTile(tileIndex: number) {
       state = pickForceAuctionTile(state, tileIndex);
       afterHumanAuction();
+    },
+    pickDebtDemolishTile(tileIndex: number) {
+      state = pickDebtDemolishTile(state, tileIndex);
+      emit();
+      if (
+        state.prompt.kind === "debtDemolishPick" ||
+        state.prompt.kind === "debtFacilitySell" ||
+        state.prompt.kind === "debtAuctionPick" ||
+        state.prompt.kind === "auction"
+      ) {
+        void runAiIfNeeded();
+      }
+    },
+    pickDebtFacilitySell(tileIndex: number) {
+      state = pickDebtFacilitySell(state, tileIndex);
+      emit();
+      if (
+        state.prompt.kind === "debtDemolishPick" ||
+        state.prompt.kind === "debtFacilitySell" ||
+        state.prompt.kind === "debtAuctionPick" ||
+        state.prompt.kind === "auction"
+      ) {
+        void runAiIfNeeded();
+      }
     },
     pickDebtAuctionTile(tileIndex: number) {
       state = pickDebtAuctionTile(state, tileIndex);
@@ -797,14 +858,14 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       state = auctionDoPass(state);
       afterHumanAuction();
     },
-    cancelMafiaEnter() {
-      state = cancelMafiaEnter(state);
+    cancelCasinoEnter() {
+      state = cancelCasinoEnter(state);
       emit();
     },
-    acceptMafiaEnter() {
-      state = acceptMafiaEnter(state);
+    acceptCasinoEnter() {
+      state = acceptCasinoEnter(state);
       emit();
-      if (state.prompt.kind === "auction" || state.prompt.kind === "debtAuctionPick") {
+      if (state.prompt.kind === "auction" || state.prompt.kind === "debtAuctionPick" || state.prompt.kind === "debtDemolishPick" || state.prompt.kind === "debtFacilitySell") {
         void runAiIfNeeded();
       }
     },
@@ -835,11 +896,22 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       state = swapWith(state, otherId);
       emit();
     },
-    save() {
-      return JSON.stringify(state);
+    exportState() {
+      return structuredClone(state);
     },
-    load(raw: string) {
-      state = JSON.parse(raw) as GameState;
+    importState(next: GameState) {
+      aiRunId += 1;
+      auctionEpoch += 1;
+      aiPlaying = false;
+      // Keep remaining card set, but re-shuffle order so reload isn't deterministic.
+      state = {
+        ...next,
+        pendingCasino: next.pendingCasino ?? null,
+        eventDeck: reshuffleDrawPile(next.eventDeck),
+        lastDice: null,
+        lastCasinoDice: null,
+        lastTrackDice: null,
+      };
       emit();
       void runAiIfNeeded();
     },
