@@ -11,7 +11,7 @@ export interface DeedState {
 export function emptyDeeds(tiles: BoardTile[]): Record<number, DeedState> {
   const deeds: Record<number, DeedState> = {};
   for (const t of tiles) {
-    if (t.kind === "property" || t.kind === "facility") {
+    if (t.kind === "property" || t.kind === "facility" || t.kind === "port") {
       deeds[t.index] = { ownerId: null, houses: 0, special: null };
     }
   }
@@ -29,6 +29,21 @@ export function ownsContinent(
   );
   if (props.length === 0) return false;
   return props.every((t) => deeds[t.index]?.ownerId === ownerId);
+}
+
+/** Owner who fully controls a continent, or null. */
+export function continentControllerId(
+  tiles: BoardTile[],
+  deeds: Record<number, DeedState>,
+  continent: string,
+): string | null {
+  const props = tiles.filter(
+    (t) => t.kind === "property" && t.continent === continent,
+  );
+  if (props.length === 0) return null;
+  const ownerId = deeds[props[0]!.index]?.ownerId ?? null;
+  if (!ownerId) return null;
+  return ownsContinent(tiles, deeds, ownerId, continent) ? ownerId : null;
 }
 
 export function completeContinentCount(
@@ -52,7 +67,7 @@ export function playerOwnsFacility(
   tiles: BoardTile[],
   deeds: Record<number, DeedState>,
   ownerId: string,
-  zh: "石油" | "矿山",
+  zh: "油田" | "矿山",
 ): boolean {
   return tiles.some(
     (t) =>
@@ -60,6 +75,43 @@ export function playerOwnsFacility(
       t.zh === zh &&
       deeds[t.index]?.ownerId === ownerId,
   );
+}
+
+/** How many Atlantic ports this player owns (0–2). */
+export function ownedPortCount(
+  tiles: BoardTile[],
+  deeds: Record<number, DeedState>,
+  ownerId: string,
+): number {
+  return tiles.filter(
+    (t) => t.kind === "port" && deeds[t.index]?.ownerId === ownerId,
+  ).length;
+}
+
+/** Landlord bonus for visiting own port: 20 if 1 port, 50 if 2. */
+export function portVisitBonus(
+  tiles: BoardTile[],
+  deeds: Record<number, DeedState>,
+  ownerId: string,
+): number {
+  const n = ownedPortCount(tiles, deeds, ownerId);
+  if (n >= 2) return 50;
+  if (n === 1) return 20;
+  return 0;
+}
+
+/** How many tourism specials this player owns. */
+export function ownedTourismCount(
+  tiles: BoardTile[],
+  deeds: Record<number, DeedState>,
+  ownerId: string,
+): number {
+  return tiles.filter(
+    (t) =>
+      t.kind === "property" &&
+      deeds[t.index]?.ownerId === ownerId &&
+      deeds[t.index]?.special === "tourism",
+  ).length;
 }
 
 /** R-013 receivable rent (before oil / rent-free). tourismDice for tourism tiles. */
@@ -81,7 +133,8 @@ export function receivableRent(
   }
   if (deed.special === "tourism") {
     const d = tourismDice ?? 1 + Math.floor(Math.random() * 6);
-    return base * (1 + d);
+    const n = Math.min(3, ownedTourismCount(tiles, deeds, deed.ownerId));
+    return base * (n + d);
   }
 
   let rent = base * (1 + deed.houses);
@@ -102,7 +155,7 @@ export function applyOilReduction(
   tileIndex: number,
   receivable: number,
 ): number {
-  if (!playerOwnsFacility(tiles, deeds, payerId, "石油")) return receivable;
+  if (!playerOwnsFacility(tiles, deeds, payerId, "油田")) return receivable;
   const tile = tiles[tileIndex]!;
   const deed = deeds[tileIndex]!;
   const base = tile.rent ?? 0;

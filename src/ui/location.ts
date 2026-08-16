@@ -124,12 +124,17 @@ export function locationView(
     }
     return { zh: tile.zh, code: "VIP", en: tile.en, Icon: IconPoker };
   }
-  if (tile.kind === "port") {
-    return { zh: "港口", code: "PRT", en: "Atlantic Port", Icon: IconPort };
+    if (tile.kind === "port") {
+    return {
+      zh: tile.zh,
+      code: tile.zh.includes("利物浦") ? "LPL" : "HFX",
+      en: tile.en,
+      Icon: IconPort,
+    };
   }
   if (tile.kind === "facility") {
-    if (tile.zh === "石油") {
-      return { zh: "石油", code: "OIL", en: "Oil", Icon: IconOil };
+    if (tile.zh === "油田" || tile.zh === "石油") {
+      return { zh: "油田", code: "OIL", en: "Oil Field", Icon: IconOil };
     }
     return { zh: "矿山", code: "MIN", en: "Mine", Icon: IconMine };
   }

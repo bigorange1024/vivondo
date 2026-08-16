@@ -29,7 +29,7 @@ const LEFT: SideSpec[] = [
   ["event", "事件", "Event"],
   ["property", "印度", "India", 460, 60, "asia"],
   ["property", "伊朗", "Iran", 360, 45, "asia"],
-  ["facility", "石油", "Oil", 1000],
+  ["facility", "油田", "Oil Field", 1000],
   ["property", "沙特", "Saudi Arabia", 440, 55, "asia"],
   ["property", "俄罗斯", "Russia", 400, 50, "europe"],
   ["event", "事件", "Event"],
@@ -38,7 +38,7 @@ const LEFT: SideSpec[] = [
 
 const TOP: SideSpec[] = [
   ["property", "英国", "UK", 540, 70, "europe"],
-  ["port", "港口", "Port", 400],
+  ["port", "利物浦港", "Port of Liverpool", 1000],
   ["property", "法国", "France", 560, 70, "europe"],
   ["property", "意大利", "Italy", 440, 55, "europe"],
   ["mafia", "蒙特卡洛赌城", "Monte Carlo"],
@@ -64,7 +64,7 @@ const RIGHT: SideSpec[] = [
 
 const BOTTOM: SideSpec[] = [
   ["property", "墨西哥", "Mexico", 410, 50, "na"],
-  ["port", "港口", "Port", 400],
+  ["port", "哈利法克斯港", "Port of Halifax", 1000],
   ["property", "加拿大", "Canada", 520, 65, "na"],
   ["property", "美国", "USA", 600, 75, "na"],
   ["mafia", "拉斯维加斯赌城", "Las Vegas"],
@@ -178,6 +178,39 @@ export const CONTINENT_COLORS: Record<string, string> = {
   na: "#81d4fa",
   oceania: "#00a86b",
 };
+
+/** Legend swatches under the board — matches assets/render_board_v7.py. */
+export const LEGEND_CONTINENTS = [
+  { id: "asia", zh: "亚洲" },
+  { id: "europe", zh: "欧洲" },
+  { id: "africa", zh: "非洲" },
+  { id: "sa", zh: "南美" },
+  { id: "ca", zh: "中美" },
+  { id: "na", zh: "北美" },
+  { id: "oceania", zh: "大洋洲" },
+] as const;
+
+/** Color swatch box for a legend continent (% of full board PNG). */
+export function legendContinentSwatchPercent(legendIndex: number): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+} {
+  const { width, height, playSize } = BOARD_PNG;
+  const lx = 28;
+  const ly = playSize + 14;
+  const sw = 26;
+  const step = 172;
+  const x = lx + legendIndex * step;
+  const y = ly + 6;
+  return {
+    left: (x / width) * 100,
+    top: (y / height) * 100,
+    width: (sw / width) * 100,
+    height: (sw / height) * 100,
+  };
+}
 
 /** Full tile face box (% of play area), matching render_board_v7 gap. */
 export function tileRectPercent(tile: BoardTile): {

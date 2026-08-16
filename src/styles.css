@@ -135,18 +135,52 @@ body {
   pointer-events: none;
 }
 
+.legend-owners {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 8;
+}
+
+.legend-owner {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: calc(var(--board-scale) * 3px);
+  border: calc(var(--board-scale) * 1.5px) solid rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 0 0 calc(var(--board-scale) * 1px) rgba(30, 42, 54, 0.35),
+    0 calc(var(--board-scale) * 1px) calc(var(--board-scale) * 2px) rgba(0, 0, 0, 0.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(calc(var(--board-scale) * -18px));
+}
+
+.legend-owner-id {
+  color: #fff;
+  font-weight: 800;
+  font-size: calc(var(--board-scale) * 9px);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+  padding: 0 1px;
+}
+
 .token {
   position: absolute;
   width: calc(var(--board-scale) * 16px);
   height: calc(var(--board-scale) * 16px);
   border-radius: 50% 50% 50% 10%;
-  transform: translate(-50%, -50%) rotate(-45deg);
+  transform: translate(-50%, -50%) rotate(-45deg) scale(0.72);
   border: calc(var(--board-scale) * 2px) solid #fff;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
   transition:
-    width 0.15s ease,
-    height 0.15s ease,
-    box-shadow 0.15s ease;
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
 }
 
 .token.on-track {
@@ -154,8 +188,7 @@ body {
 }
 
 .token.active {
-  width: calc(var(--board-scale) * 22px);
-  height: calc(var(--board-scale) * 22px);
+  transform: translate(-50%, -50%) rotate(-45deg) scale(1.38);
   border-width: calc(var(--board-scale) * 2.5px);
   box-shadow:
     0 0 0 2px rgba(255, 255, 255, 0.95),

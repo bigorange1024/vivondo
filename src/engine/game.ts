@@ -6,7 +6,10 @@ import {
 import {
   applyOilReduction,
   emptyDeeds,
+  ownedPortCount,
+  ownedTourismCount,
   playerOwnsFacility,
+  portVisitBonus,
   receivableRent,
   upgradeCost,
   type DeedState,
@@ -70,13 +73,13 @@ export type SettlePrompt =
       mode: "house" | "specialize" | "respecialize";
     }
   | { kind: "airport" }
-  | { kind: "airportDest"; free: boolean }
+  | { kind: "airportDest"; free: boolean; usePlane: boolean }
   | { kind: "port" }
   | { kind: "facilityOwn"; tileIndex: number }
   | { kind: "hospitalAdmit" }
   | { kind: "rentFree"; amount: number; landlordId: string; tileZh: string }
   | { kind: "freeFlight" }
-  | { kind: "portDispatch" }
+  | { kind: "freeSail" }
   | { kind: "forceAuction" }
   | { kind: "forceAuctionPick" }
   | { kind: "debtAuctionPick" }
@@ -96,6 +99,8 @@ export interface PendingDebt {
   payeeId: string | null;
   reason: string;
   debtorId: string;
+  /** Raise cash to this floor via auction; proceeds stay with debtor (R-017 min cash). */
+  solvencyTarget?: number;
 }
 
 /** Bankrupt player's remaining country tiles to auction (R-017). */
@@ -125,8 +130,9 @@ export interface PlayerState {
 }
 
 const FACILITY_BUYBACK = 500;
-const PORT_FARE = 400;
-const PORT_SHIP_DISCOUNT = 200;
+const PORT_FARE = 200;
+/** R-017: players should not sit at 0 cash while holding auctionable land. */
+const MIN_CASH = 5;
 
 export interface GameConfig {
   humans: number;
@@ -155,6 +161,11 @@ export interface GameState {
   turn: number;
   log: string[];
   winnerId: string | null;
+  /**
+   * After using port sail this turn: may buy / half-sell at arrival,
+   * but must not sail again (防来回刷). Cleared when turn ends.
+   */
+  portNoResail: boolean;
 }
 
 const COLORS = ["#286ec8", "#c83737", "#289046", "#d2aa28"];
@@ -244,6 +255,7 @@ export function createInitialState(config: GameConfig): GameState {
       "对局开始 · Vivondo",
     ],
     winnerId: null,
+    portNoResail: false,
   };
 }
 
@@ -507,6 +519,56 @@ function payExact(
         ? `${payer.name} 支付 ${amount}（${reason}）`
         : `${payer.name} 向 ${s.players[findPlayerIndex(s, payeeId)]!.name} 支付 ${amount}（${reason}）`,
     );
+    if (!s.players[payerIndex]!.eliminated) {
+      s = enforceMinSolvency(s, payerIndex);
+    }
+  }
+  return s;
+}
+
+/**
+ * R-017 minimum cash: if cash < 5 and player still has auctionable land,
+ * force fundraising auctions; if cash ≤ 0 and nothing left to sell → bankrupt.
+ */
+function enforceMinSolvency(
+  state: GameState,
+  playerIndex: number,
+): GameState {
+  let s = state;
+  const player = s.players[playerIndex]!;
+  if (player.eliminated) return s;
+  if (player.cash >= MIN_CASH) return s;
+  // Don't interrupt an active estate liquidation / other debt auction.
+  if (s.pendingEstate != null) return s;
+  if (s.pendingDebt != null && s.pendingDebt.solvencyTarget == null) return s;
+
+  s = sellOilMineForCash(s, playerIndex, MIN_CASH);
+  if (s.players[playerIndex]!.cash >= MIN_CASH) return s;
+
+  const props = auctionableProperties(s, player.id);
+  if (props.length > 0) {
+    return pushLog(
+      {
+        ...s,
+        pendingDebt: {
+          amount: MIN_CASH,
+          payeeId: null,
+          reason: "恢复最低现金",
+          debtorId: player.id,
+          solvencyTarget: MIN_CASH,
+        },
+        prompt: { kind: "debtAuctionPick" },
+      },
+      `${player.name} 现金不足 ${MIN_CASH}，必须拍卖地产筹资`,
+    );
+  }
+
+  if (s.players[playerIndex]!.cash <= 0) {
+    return declareBankrupt(
+      s,
+      playerIndex,
+      "现金耗尽且无国家地产可拍卖",
+    );
   }
   return s;
 }
@@ -540,9 +602,9 @@ function declareBankrupt(
     s = { ...s, pendingDebt: null };
   }
 
-  // Facilities: unconditional GM reclaim (never auctioned).
+  // Facilities & ports: unconditional GM reclaim (never auctioned).
   for (const t of s.tiles) {
-    if (t.kind !== "facility") continue;
+    if (t.kind !== "facility" && t.kind !== "port") continue;
     if (s.deeds[t.index]?.ownerId !== player.id) continue;
     s = {
       ...s,
@@ -597,9 +659,9 @@ function declareBankrupt(
     hospitalSkips: 0,
   });
   s = pushLog(s, `${player.name} ${reason} · 破产出局`);
-  s = checkWinner(s);
 
   if (queue.length === 0) {
+    s = checkWinner(s);
     return { ...s, pendingEstate: null, prompt: { kind: "idle" } };
   }
 
@@ -612,6 +674,7 @@ function declareBankrupt(
     pendingEstate: { bankruptId: player.id, queue },
     auction: null,
   };
+  // Do NOT checkWinner yet — estate auctions must run while other players can bid.
   return continueEstateLiquidation(s);
 }
 
@@ -624,27 +687,11 @@ function continueEstateLiquidation(state: GameState): GameState {
   );
 
   if (queue.length === 0) {
-    return pushLog(
+    let s = pushLog(
       { ...state, pendingEstate: null, auction: null, prompt: { kind: "idle" } },
       "破产地产清算完毕",
     );
-  }
-
-  // Game already over — reclaim remaining without bidding.
-  if (state.winnerId) {
-    let s = state;
-    for (const i of queue) {
-      const tile = s.tiles[i]!;
-      s = {
-        ...s,
-        deeds: {
-          ...s.deeds,
-          [i]: { ownerId: null, houses: 0, special: null },
-        },
-      };
-      s = pushLog(s, `${tile.zh} 随终局归 GM 无主`);
-    }
-    return { ...s, pendingEstate: null, auction: null, prompt: { kind: "idle" } };
+    return checkWinner(s);
   }
 
   const [next, ...rest] = queue;
@@ -710,12 +757,16 @@ function sellOilMineForCash(
   const player = s.players[playerIndex]!;
   if (player.cash >= need) return s;
 
-  for (const zh of ["石油", "矿山"] as const) {
+  const sellables: { kind: "facility" | "port"; zh?: string }[] = [
+    { kind: "facility", zh: "油田" },
+    { kind: "facility", zh: "矿山" },
+  ];
+  for (const item of sellables) {
     if (s.players[playerIndex]!.cash >= need) break;
     const tile = s.tiles.find(
       (t) =>
-        t.kind === "facility" &&
-        t.zh === zh &&
+        t.kind === item.kind &&
+        t.zh === item.zh &&
         s.deeds[t.index]?.ownerId === player.id,
     );
     if (!tile) continue;
@@ -731,7 +782,29 @@ function sellOilMineForCash(
     });
     s = pushLog(
       s,
-      `${player.name} 筹资将 ${zh} 半价退回 GM，收回 ${FACILITY_BUYBACK}`,
+      `${player.name} 筹资将 ${tile.zh} 半价退回 GM，收回 ${FACILITY_BUYBACK}`,
+    );
+  }
+  // Ports: sell any owned port (names may differ)
+  while (s.players[playerIndex]!.cash < need) {
+    const tile = s.tiles.find(
+      (t) =>
+        t.kind === "port" && s.deeds[t.index]?.ownerId === player.id,
+    );
+    if (!tile) break;
+    s = {
+      ...s,
+      deeds: {
+        ...s.deeds,
+        [tile.index]: { ownerId: null, houses: 0, special: null },
+      },
+    };
+    s = mapPlayer(s, playerIndex, {
+      cash: s.players[playerIndex]!.cash + FACILITY_BUYBACK,
+    });
+    s = pushLog(
+      s,
+      `${player.name} 筹资将 ${tile.zh} 半价退回 GM，收回 ${FACILITY_BUYBACK}`,
     );
   }
   return s;
@@ -785,12 +858,105 @@ function resumePendingDebt(state: GameState): GameState {
   if (debtorIndex < 0) {
     return { ...state, pendingDebt: null, prompt: { kind: "idle" } };
   }
+
+  if (debt.solvencyTarget != null) {
+    let s: GameState = { ...state, pendingDebt: null };
+    s = sellOilMineForCash(s, debtorIndex, debt.solvencyTarget);
+    const cash = s.players[debtorIndex]!.cash;
+    if (cash >= debt.solvencyTarget) {
+      return pushLog(
+        { ...s, prompt: { kind: "idle" } },
+        `${s.players[debtorIndex]!.name} 已恢复最低现金 ${debt.solvencyTarget}`,
+      );
+    }
+    const props = auctionableProperties(s, debt.debtorId);
+    if (props.length > 0) {
+      return {
+        ...s,
+        pendingDebt: debt,
+        prompt: { kind: "debtAuctionPick" },
+      };
+    }
+    if (cash <= 0) {
+      return declareBankrupt(
+        s,
+        debtorIndex,
+        "现金耗尽且无国家地产可拍卖",
+      );
+    }
+    return { ...s, prompt: { kind: "idle" } };
+  }
+
   const s: GameState = { ...state, pendingDebt: null };
   return payDebt(s, debtorIndex, debt.amount, debt.payeeId, debt.reason);
 }
 
 function isHospitalized(player: { hospitalSkips: number }): boolean {
   return player.hospitalSkips > 0;
+}
+
+/** Pay landlord bonus when they visit (pass or stop) their own port. */
+function tryPortVisitBonus(
+  state: GameState,
+  playerIndex: number,
+  tileIndex: number,
+): GameState {
+  const tile = state.tiles[tileIndex];
+  if (!tile || tile.kind !== "port") return state;
+  const deed = state.deeds[tileIndex];
+  const player = state.players[playerIndex]!;
+  if (!deed?.ownerId || deed.ownerId !== player.id) return state;
+  const amount = portVisitBonus(state.tiles, state.deeds, player.id);
+  if (amount <= 0) return state;
+  if (isHospitalized(player)) {
+    return pushLog(
+      state,
+      `${player.name} 住院中，无法领取港口收益 ${amount}`,
+    );
+  }
+  const ports = ownedPortCount(state.tiles, state.deeds, player.id);
+  return gainCash(
+    state,
+    playerIndex,
+    amount,
+    `港口收益（持有${ports}处·${tile.zh}）`,
+  );
+}
+
+/** Visit every port on a multi-step path (clockwise or reverse). */
+function applyPortVisitBonusesAlongMove(
+  state: GameState,
+  playerIndex: number,
+  from: number,
+  steps: number,
+  clockwise: boolean,
+): GameState {
+  let s = state;
+  for (let i = 1; i <= steps; i++) {
+    const idx = clockwise
+      ? (from + i) % BOARD_TILE_COUNT
+      : (from - i + BOARD_TILE_COUNT) % BOARD_TILE_COUNT;
+    s = tryPortVisitBonus(s, playerIndex, idx);
+  }
+  return s;
+}
+
+function continueToPortIfOnPort(state: GameState): GameState {
+  const tile = state.tiles[currentPlayer(state).position];
+  if (tile?.kind !== "port") return state;
+  // Arrived via sail this turn — no second sail; turn ends after buy/sell/keep.
+  if (state.portNoResail) {
+    return pushLog(
+      {
+        ...state,
+        phase: "end",
+        prompt: { kind: "idle" },
+        portNoResail: false,
+      },
+      `${currentPlayer(state).name} 出航后本回合结束`,
+    );
+  }
+  return { ...state, prompt: { kind: "port" } };
 }
 
 /**
@@ -855,13 +1021,6 @@ function applyGoSalary(
   const landedOnGo = to === 0;
   const due = landedOnGo ? GO_WAGE * 2 : GO_WAGE;
 
-  if (player.hasPlane) {
-    return pushLog(
-      mapPlayer(state, playerIndex, { hasPlane: false }),
-      `${player.name} 持飞机 token · ${landedOnGo ? "停留" : "途经"}银行不领薪，token 收回`,
-    );
-  }
-
   if (isHospitalized(player)) {
     return pushLog(
       state,
@@ -879,12 +1038,6 @@ function applyGoSalary(
 
 function applyStopGoSalary(state: GameState, playerIndex: number): GameState {
   const player = state.players[playerIndex]!;
-  if (player.hasPlane) {
-    return pushLog(
-      mapPlayer(state, playerIndex, { hasPlane: false }),
-      `${player.name} 持飞机 token · 停留银行不领薪，token 收回`,
-    );
-  }
   if (isHospitalized(player)) {
     return pushLog(
       state,
@@ -903,7 +1056,7 @@ export function rollDice(state: GameState): GameState {
   if (player.hospitalSkips > 0) {
     const left = player.hospitalSkips - 1;
     let s = mapPlayer(state, playerIndex, { hospitalSkips: left });
-    s = pushLog(s, `${player.name} 住院中，跳过掷骰（剩余 ${left} 次）`);
+    s = pushLog(s, `${player.name} 住院中，跳过本回合（剩余 ${left} 次）`);
     return { ...s, phase: "end", prompt: { kind: "idle" }, lastDice: null };
   }
 
@@ -934,6 +1087,7 @@ export function rollDice(state: GameState): GameState {
   };
   s = pushLog(s, `${player.name} 掷出 ${dice}，前往 ${tile.zh}（${tile.en}）`);
   s = applyGoSalary(s, playerIndex, from, dice, to);
+  s = applyPortVisitBonusesAlongMove(s, playerIndex, from, dice, true);
   return beginTileSettlement(s);
 }
 
@@ -1000,7 +1154,7 @@ function beginTileSettlement(state: GameState): GameState {
     return settleCorner(state, tile);
   }
   if (tile.kind === "port") {
-    return { ...state, prompt: { kind: "port" } };
+    return settlePort(state, tile);
   }
   if (tile.kind === "event") {
     return drawAndResolveEvent(state);
@@ -1010,6 +1164,56 @@ function beginTileSettlement(state: GameState): GameState {
   }
 
   return { ...state, prompt: { kind: "idle" } };
+}
+
+function settlePort(state: GameState, tile: BoardTile): GameState {
+  const deed = state.deeds[tile.index];
+  const player = currentPlayer(state);
+
+  if (!deed || deed.ownerId == null) {
+    return { ...state, prompt: { kind: "buy", tileIndex: tile.index } };
+  }
+
+  const landlord = state.players.find((p) => p.id === deed.ownerId);
+  if (landlord?.eliminated) {
+    const s: GameState = {
+      ...state,
+      deeds: {
+        ...state.deeds,
+        [tile.index]: { ownerId: null, houses: 0, special: null },
+      },
+    };
+    return pushLog(
+      { ...s, prompt: { kind: "buy", tileIndex: tile.index } },
+      `${tile.zh} 原属已出局玩家，收归 GM 无主`,
+    );
+  }
+
+  if (deed.ownerId === player.id) {
+    // Always allow half-price sell-back when stopping on own port (walk or sail).
+    return {
+      ...state,
+      prompt: { kind: "facilityOwn", tileIndex: tile.index },
+    };
+  }
+
+  // Others: no rent. If arrived via sail, turn ends (no re-sail).
+  if (state.portNoResail) {
+    return pushLog(
+      {
+        ...state,
+        phase: "end",
+        prompt: { kind: "idle" },
+        portNoResail: false,
+      },
+      `${player.name} 停在他人的 ${tile.zh}（港口不对他人收租）· 本回合结束`,
+    );
+  }
+
+  return pushLog(
+    { ...state, prompt: { kind: "port" } },
+    `${player.name} 停在他人的 ${tile.zh}（港口不对他人收租）`,
+  );
 }
 
 function settleMafiaEntrance(state: GameState): GameState {
@@ -1397,16 +1601,30 @@ function settleOwnable(state: GameState, tile: BoardTile): GameState {
 
   let s = state;
   if (deed.special === "tourism" && tourismDice != null) {
-    s = pushLog(s, `旅游国掷骰 ${tourismDice} · 应收 ${receivable}`);
+    const tourN = Math.min(
+      3,
+      ownedTourismCount(state.tiles, state.deeds, deed.ownerId!),
+    );
+    s = pushLog(
+      s,
+      `旅游国：持有${tourN}处 + 掷骰${tourismDice} → ×${tourN + tourismDice} · 应收 ${receivable}`,
+    );
   }
   if (due !== receivable) {
-    s = pushLog(s, `石油减免：应收 ${receivable} → 实付 ${due}`);
+    s = pushLog(s, `油田减免：应收 ${receivable} → 实付 ${due}`);
   }
 
   if (due <= 0) {
     return pushLog(
       { ...s, prompt: { kind: "idle" } },
       `${player.name} 在 ${tile.zh} 应付地租 0`,
+    );
+  }
+
+  if (landlord && isHospitalized(landlord)) {
+    return pushLog(
+      { ...s, prompt: { kind: "idle" } },
+      `${landlord.name} 住院中，不能收取地租 · ${player.name} 在 ${tile.zh} 免付本次地租`,
     );
   }
 
@@ -1571,7 +1789,8 @@ function resolveHoldable(
     ...state,
     eventDeck: returnCardToDraw(state.eventDeck, card),
   };
-  s = gainCash(s, s.currentPlayerIndex, 500, "重复持有卡补偿");
+  const bonus = hold === "vip" ? 200 : 100;
+  s = gainCash(s, s.currentPlayerIndex, bonus, "重复持有卡补偿");
   return { ...s, prompt: { kind: "idle" } };
 }
 
@@ -1674,6 +1893,7 @@ function resolveInstant(state: GameState, card: EventCardId): GameState {
         s,
         `${player.name} 后退 ${back} 格至 ${s.tiles[to]!.zh}（逆时针不领薪）`,
       );
+      s = applyPortVisitBonusesAlongMove(s, idx, from, back, false);
       return beginTileSettlement(s);
     }
     case "E12": {
@@ -1683,16 +1903,17 @@ function resolveInstant(state: GameState, card: EventCardId): GameState {
       s = mapPlayer(s, idx, { position: to });
       s = pushLog(s, `${player.name} 加速前进 ${fwd} 格至 ${s.tiles[to]!.zh}`);
       s = applyGoSalary(s, idx, from, fwd, to);
+      s = applyPortVisitBonusesAlongMove(s, idx, from, fwd, true);
       return beginTileSettlement(s);
     }
     case "E13":
       return { ...s, prompt: { kind: "freeFlight" } };
     case "E14":
-      return { ...s, prompt: { kind: "portDispatch" } };
+      return { ...s, prompt: { kind: "freeSail" } };
     case "E15": {
-      if (playerOwnsFacility(s.tiles, s.deeds, player.id, "石油")) {
+      if (playerOwnsFacility(s.tiles, s.deeds, player.id, "油田")) {
         return {
-          ...gainCash(s, idx, 200, "油价波动（持有石油）"),
+          ...gainCash(s, idx, 200, "油价波动（持有油田）"),
           prompt: { kind: "idle" },
         };
       }
@@ -1998,12 +2219,18 @@ export function chooseBuy(state: GameState): GameState {
     prompt: { kind: "idle" },
   };
   const effect =
-    tile.zh === "石油"
+    tile.zh === "油田"
       ? " · 付租时可减免"
       : tile.zh === "矿山"
         ? " · 加盖费用 −50"
-        : "";
-  return pushLog(s, `${player.name} 购买 ${tile.zh}，花费 ${price}${effect}`);
+        : tile.kind === "port"
+          ? " · 路过/停留可领港口收益"
+          : "";
+  let s2 = pushLog(s, `${player.name} 购买 ${tile.zh}，花费 ${price}${effect}`);
+  if (tile.kind === "port") {
+    s2 = tryPortVisitBonus(s2, state.currentPlayerIndex, tile.index);
+  }
+  return continueToPortIfOnPort(s2);
 }
 
 export function sellFacility(state: GameState): GameState {
@@ -2014,7 +2241,10 @@ export function sellFacility(state: GameState): GameState {
   const tile = state.tiles[tileIndex]!;
   const player = currentPlayer(state);
   const deed = state.deeds[tileIndex];
-  if (!deed || deed.ownerId !== player.id || tile.kind !== "facility") {
+  if (!deed || deed.ownerId !== player.id) {
+    return state;
+  }
+  if (tile.kind !== "facility" && tile.kind !== "port") {
     return state;
   }
 
@@ -2029,10 +2259,11 @@ export function sellFacility(state: GameState): GameState {
     },
     prompt: { kind: "idle" },
   };
-  return pushLog(
+  s = pushLog(
     s,
     `${player.name} 将 ${tile.zh} 半价退回 GM，收回 ${FACILITY_BUYBACK}`,
   );
+  return continueToPortIfOnPort(s);
 }
 
 export function keepFacility(state: GameState): GameState {
@@ -2040,10 +2271,11 @@ export function keepFacility(state: GameState): GameState {
     return state;
   }
   const tile = state.tiles[state.prompt.tileIndex]!;
-  return pushLog(
+  let s = pushLog(
     { ...state, prompt: { kind: "idle" } },
     `${currentPlayer(state).name} 保留 ${tile.zh}`,
   );
+  return continueToPortIfOnPort(s);
 }
 
 export function otherPortIndex(
@@ -2057,46 +2289,105 @@ export function otherPortIndex(
 }
 
 export function portStay(state: GameState): GameState {
-  if (state.phase !== "settle" || state.prompt.kind !== "port") return state;
-  return pushLog(
-    { ...state, prompt: { kind: "idle" } },
-    `${currentPlayer(state).name} 停留港口，不出航`,
-  );
+  if (state.phase !== "settle") return state;
+  if (state.prompt.kind === "port") {
+    return pushLog(
+      { ...state, prompt: { kind: "idle" } },
+      `${currentPlayer(state).name} 停留港口，不出航`,
+    );
+  }
+  if (state.prompt.kind === "freeSail") {
+    return pushLog(
+      { ...state, prompt: { kind: "idle" } },
+      `${currentPlayer(state).name} 放弃港口贵宾免费出航`,
+    );
+  }
+  return state;
 }
 
-export function portSail(state: GameState, useShip: boolean): GameState {
-  if (state.phase !== "settle" || state.prompt.kind !== "port") return state;
+function finishSail(
+  state: GameState,
+  destIndex: number,
+  opts: { free: boolean; useShip: boolean },
+): GameState {
   const player = currentPlayer(state);
-  if (useShip && !player.hasShip) return state;
+  if (opts.useShip && !player.hasShip) {
+    return pushLog(state, `${player.name} 没有轮船 token，无法免票出航`);
+  }
 
-  const fare = useShip ? PORT_FARE - PORT_SHIP_DISCOUNT : PORT_FARE;
+  const fare = opts.free || opts.useShip ? 0 : PORT_FARE;
   if (player.cash < fare) {
     return pushLog(state, `${player.name} 现金不足，无法出航（需 ${fare}）`);
   }
 
-  const dest = otherPortIndex(state, player.position);
-  if (dest == null) return state;
+  const dest = state.tiles[destIndex];
+  if (!dest || dest.kind !== "port") return state;
+  if (dest.index === player.position) {
+    return pushLog(state, `${player.name} 已在该港口`);
+  }
+
+  let nextShip = player.hasShip;
+  let shipNote = "";
+  if (opts.free) {
+    if (!player.hasShip) {
+      nextShip = true;
+      shipNote = " · 获得轮船 token";
+    } else {
+      shipNote = " · 已持有轮船 token（不再另发）";
+    }
+  } else if (opts.useShip) {
+    nextShip = false;
+    shipNote = " · 使用轮船 token（免票）";
+  } else if (!player.hasShip) {
+    nextShip = true;
+    shipNote = " · 获得轮船 token";
+  } else {
+    shipNote = " · 保留轮船 token";
+  }
 
   let s = mapPlayer(state, state.currentPlayerIndex, {
     cash: player.cash - fare,
-    position: dest,
-    hasShip: useShip ? false : player.hasShip,
+    position: destIndex,
+    hasShip: nextShip,
   });
-  const shipNote = useShip ? " · 使用轮船 token（−200）" : "";
+  s = {
+    ...s,
+    phase: "settle",
+    portNoResail: true,
+  };
   s = pushLog(
     s,
-    `${player.name} 出航至另一港口，船费 ${fare}${shipNote} · 本回合结束`,
+    `${player.name} ${opts.free ? "免费" : ""}出航至 ${dest.zh}${fare ? `，船费 ${fare}` : opts.useShip || opts.free ? "，免票" : ""}${shipNote}`,
   );
-  return { ...s, phase: "end", prompt: { kind: "idle" } };
+  // Arrival visit bonus if already own dest (buy-after-arrive pays in chooseBuy).
+  s = tryPortVisitBonus(s, state.currentPlayerIndex, destIndex);
+  return settlePort(s, dest);
+}
+
+/** Paid port tile: sail to the other Atlantic port. */
+export function portSail(state: GameState, useShip: boolean): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "port") return state;
+  const dest = otherPortIndex(state, currentPlayer(state).position);
+  if (dest == null) return state;
+  return finishSail(state, dest, { free: false, useShip });
+}
+
+/** E14 free sail: pick either port (not current tile). */
+export function freeSailTo(state: GameState, destIndex: number): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "freeSail") {
+    return state;
+  }
+  return finishSail(state, destIndex, { free: true, useShip: false });
 }
 
 export function declineBuy(state: GameState): GameState {
   if (state.phase !== "settle" || state.prompt.kind !== "buy") return state;
   const tile = state.tiles[state.prompt.tileIndex]!;
-  return pushLog(
+  let s = pushLog(
     { ...state, prompt: { kind: "idle" } },
     `${currentPlayer(state).name} 放弃购买 ${tile.zh}`,
   );
+  return continueToPortIfOnPort(s);
 }
 
 export function chooseUpgrade(
@@ -2192,28 +2483,53 @@ export function airportStay(state: GameState): GameState {
   return state;
 }
 
-export function airportBeginFly(state: GameState): GameState {
+export function airportBeginFly(
+  state: GameState,
+  usePlane = false,
+): GameState {
   if (state.phase !== "settle") return state;
   if (state.prompt.kind === "airport") {
-    return { ...state, prompt: { kind: "airportDest", free: false } };
+    if (usePlane && !currentPlayer(state).hasPlane) {
+      return pushLog(state, `${currentPlayer(state).name} 没有飞机 token`);
+    }
+    return {
+      ...state,
+      prompt: { kind: "airportDest", free: false, usePlane },
+    };
   }
   if (state.prompt.kind === "freeFlight") {
-    return { ...state, prompt: { kind: "airportDest", free: true } };
+    return {
+      ...state,
+      prompt: { kind: "airportDest", free: true, usePlane: false },
+    };
   }
   return state;
+}
+
+/** Paid airport fare: ×2 normally, ×1 when spending a plane token. Free flight: 0. */
+export function airportFare(
+  price: number,
+  opts: { free: boolean; usePlane: boolean },
+): number {
+  if (opts.free) return 0;
+  return opts.usePlane ? price : price * 2;
 }
 
 export function airportFlyTo(state: GameState, destIndex: number): GameState {
   if (state.phase !== "settle" || state.prompt.kind !== "airportDest") {
     return state;
   }
-  const free = state.prompt.free;
+  const { free, usePlane } = state.prompt;
   const dest = state.tiles[destIndex];
   if (!dest || dest.kind !== "property") return state;
 
-  const price = dest.price ?? 0;
-  const fare = free ? 0 : price * 3;
   const player = currentPlayer(state);
+  if (usePlane && !player.hasPlane) {
+    return pushLog(state, `${player.name} 没有飞机 token，无法原价起飞`);
+  }
+
+  const price = dest.price ?? 0;
+  const fare = airportFare(price, { free, usePlane });
   if (player.cash < fare) {
     return pushLog(
       state,
@@ -2221,15 +2537,33 @@ export function airportFlyTo(state: GameState, destIndex: number): GameState {
     );
   }
 
-  const gainedPlane = !player.hasPlane;
+  let nextPlane = player.hasPlane;
+  let planeNote = "";
+  if (free) {
+    if (!player.hasPlane) {
+      nextPlane = true;
+      planeNote = " · 获得飞机 token";
+    } else {
+      planeNote = " · 已持有飞机 token（不再另发）";
+    }
+  } else if (usePlane) {
+    nextPlane = false;
+    planeNote = " · 使用飞机 token（原价）";
+  } else if (!player.hasPlane) {
+    nextPlane = true;
+    planeNote = " · 获得飞机 token";
+  } else {
+    planeNote = " · 保留飞机 token";
+  }
+
   let s = mapPlayer(state, state.currentPlayerIndex, {
     cash: player.cash - fare,
     position: destIndex,
-    hasPlane: true,
+    hasPlane: nextPlane,
   });
   s = pushLog(
     s,
-    `${player.name} ${free ? "免费" : ""}飞往 ${dest.zh}${fare ? `，机票 ${fare}` : ""}${gainedPlane ? " · 获得飞机 token" : " · 已持有飞机 token"}`,
+    `${player.name} ${free ? "免费" : ""}飞往 ${dest.zh}${fare ? `，机票 ${fare}` : ""}${planeNote}`,
   );
   s = { ...s, prompt: { kind: "idle" } };
   return beginTileSettlement(s);
@@ -2295,33 +2629,6 @@ export function declineRentFree(state: GameState): GameState {
     `${tileZh} 地租`,
   );
   return settleAfterPayDebt(s);
-}
-
-export function portDispatchTakeCash(state: GameState): GameState {
-  if (state.phase !== "settle" || state.prompt.kind !== "portDispatch") {
-    return state;
-  }
-  return {
-    ...gainCash(state, state.currentPlayerIndex, 100, "港口调度"),
-    prompt: { kind: "idle" },
-  };
-}
-
-export function portDispatchTakeShip(state: GameState): GameState {
-  if (state.phase !== "settle" || state.prompt.kind !== "portDispatch") {
-    return state;
-  }
-  const player = currentPlayer(state);
-  if (player.hasShip) {
-    return pushLog(state, `${player.name} 已持有轮船 token，不可再领`);
-  }
-  return pushLog(
-    {
-      ...mapPlayer(state, state.currentPlayerIndex, { hasShip: true }),
-      prompt: { kind: "idle" },
-    },
-    `${player.name} 领取轮船 token`,
-  );
 }
 
 export function cancelForceAuction(state: GameState): GameState {
@@ -2482,10 +2789,34 @@ export function swapWith(state: GameState, otherId: string): GameState {
   );
 }
 
+/**
+ * Hospitalized player: spend one skip and pass the turn in one action
+ * (no dice roll UI).
+ */
+export function skipHospitalTurn(state: GameState): GameState {
+  if (state.phase !== "roll" || state.winnerId) return state;
+  const player = currentPlayer(state);
+  if (player.eliminated || player.hospitalSkips <= 0) return state;
+  let s = rollDice(state);
+  if (s.phase === "end") {
+    s = endTurn(s);
+  }
+  return s;
+}
+
 export function finishSettlement(state: GameState): GameState {
   if (state.phase !== "settle") return state;
   if (state.prompt.kind !== "idle") return state;
-  return { ...state, phase: "end" };
+  let s = enforceMinSolvency(state, state.currentPlayerIndex);
+  if (
+    s.prompt.kind === "debtAuctionPick" ||
+    s.pendingDebt != null ||
+    s.pendingEstate != null ||
+    s.prompt.kind === "auction"
+  ) {
+    return { ...s, phase: "settle" };
+  }
+  return { ...s, phase: "end" };
 }
 
 export function endTurn(state: GameState): GameState {
@@ -2513,6 +2844,7 @@ export function endTurn(state: GameState): GameState {
       lastCasinoDice: null,
       lastTrackDice: null,
       turn: wrapped ? state.turn + 1 : state.turn,
+      portNoResail: false,
     },
     `轮到 ${state.players[next]!.name}`,
   );

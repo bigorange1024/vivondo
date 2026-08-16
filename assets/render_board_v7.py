@@ -68,7 +68,7 @@ LEFT = [
     ("event", "事件", "Event", None, "", None),
     ("property", "印度", "India", ASIA, "460/60", "in"),
     ("property", "伊朗", "Iran", ASIA, "360/45", "ir"),
-    ("facility", "石油", "Oil", None, "1000", "oil"),
+    ("facility", "油田", "Oil Field", None, "1000", "oil"),
     ("property", "沙特", "Saudi Arabia", ASIA, "440/55", "sa"),
     ("property", "俄罗斯", "Russia", EUROPE, "400/50", "ru"),
     ("event", "事件", "Event", None, "", None),
@@ -76,7 +76,7 @@ LEFT = [
 ]
 TOP = [
     ("property", "英国", "UK", EUROPE, "540/70", "gb"),
-    ("port", "港口", "Port", None, "400", "port_n"),
+    ("port", "利物浦港", "Port of Liverpool", None, "1000", "port_n"),
     ("property", "法国", "France", EUROPE, "560/70", "fr"),
     ("property", "意大利", "Italy", EUROPE, "440/55", "it"),
     ("mafia", "蒙特卡洛赌城", "Monte Carlo", None, "", "cards"),
@@ -100,7 +100,7 @@ RIGHT = [
 ]
 BOTTOM = [
     ("property", "墨西哥", "Mexico", NA, "410/50", "mx"),
-    ("port", "港口", "Port", None, "400", "port_s"),
+    ("port", "哈利法克斯港", "Port of Halifax", None, "1000", "port_s"),
     ("property", "加拿大", "Canada", NA, "520/65", "ca"),
     ("property", "美国", "USA", NA, "600/75", "us"),
     ("mafia", "拉斯维加斯赌城", "Las Vegas", None, "", "chips"),
@@ -268,14 +268,15 @@ def paste_icon(canvas: Image.Image, icon: Image.Image, box, margin: float = 0.08
     canvas.paste(fitted, (px, py), fitted)
 
 
-def make_port_tile(w, h, zh, en, fonts):
-    """Atlantic port: AI ship icon + labels + 400."""
+def make_port_tile(w, h, zh, en, price_label, fonts):
+    """Named port: ship icon + zh/en labels + purchase price."""
     scale = 2
     W, H = w * scale, h * scale
     tile = Image.new("RGB", (W, H), WHITE)
     d = ImageDraw.Draw(tile)
     d.rectangle([0, 0, W - 1, H - 1], outline=LINE, width=max(2, scale))
-    paste_icon(tile, ICONS["ship"], (W * 0.06, H * 0.02, W * 0.94, H * 0.36), margin=0.04)
+    # Larger ship icon (top ~38% of tile)
+    paste_icon(tile, ICONS["ship"], (W * 0.06, H * 0.02, W * 0.94, H * 0.38), margin=0.04)
 
     tile = tile.resize((w, h), Image.Resampling.LANCZOS)
     d = ImageDraw.Draw(tile)
@@ -285,16 +286,19 @@ def make_port_tile(w, h, zh, en, fonts):
         tw = bb[2] - bb[0]
         d.text(((w - tw) / 2, y - bb[1]), text, font=fnt, fill=fill)
 
-    y0 = int(h * 0.38)
-    step = max(11, int(h * 0.095))
+    # Names sit lower under the large icon; keep icon size unchanged
+    y0 = int(h * 0.50)
+    step = max(10, int(h * 0.092))
     line_at(y0, zh, fonts["name_sm"], INK)
-    line_at(y0 + step, en, fonts["en"], INK)
-    line_at(y0 + step * 2 + 2, "大西洋", fonts["en"], (90, 90, 90))
-    line_at(y0 + step * 3 + 2, "Atlantic", fonts["en"], (90, 90, 90))
+    if en.lower().startswith("port of "):
+        line_at(y0 + step, "Port of", fonts["en"], INK)
+        line_at(y0 + step * 2, en[8:].strip(), fonts["en"], INK)
+    else:
+        line_at(y0 + step, en, fonts["en"], INK)
     draw_centered(
         d,
-        (1, int(h * 0.84), w - 1, h - 2),
-        "400",
+        (1, int(h * 0.88), w - 1, h - 2),
+        price_label or "1000",
         fonts["price"],
         (90, 90, 90),
     )
@@ -474,7 +478,7 @@ def main():
         elif kind == "facility":
             paste(col, row, make_facility_tile(w, h, zh, en, flag_key, fonts))
         elif kind == "port":
-            paste(col, row, make_port_tile(w, h, zh, en, fonts))
+            paste(col, row, make_port_tile(w, h, zh, en, price, fonts))
         else:
             paste(col, row, make_property_tile(w, h, zh, en, color, price, flag_key, fonts))
 

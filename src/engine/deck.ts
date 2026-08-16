@@ -54,7 +54,7 @@ export const CARD_ZH: Record<EventCardId, string> = {
   E11: "随机后退",
   E12: "加速前进",
   E13: "机场贵宾",
-  E14: "港口调度",
+  E14: "港口贵宾",
   E15: "油价波动",
   E16: "矿难抚恤",
   E17: "证券招待",

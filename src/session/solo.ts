@@ -4,6 +4,7 @@ import {
   airportBeginFly,
   airportFlyTo,
   airportStay,
+  airportFare,
   auctionBid,
   auctionDoBuyout,
   auctionDoPass,
@@ -34,8 +35,7 @@ import {
   pickGunBuild,
   pickGunDemolish,
   skipGunEffect,
-  portDispatchTakeCash,
-  portDispatchTakeShip,
+  freeSailTo,
   portSail,
   portStay,
   proceedForceAuction,
@@ -44,6 +44,7 @@ import {
   rollInitiative,
   sellFacility,
   skipSwap,
+  skipHospitalTurn,
   swapWith,
   useDischargeCard,
   useRentFree,
@@ -55,27 +56,29 @@ import {
 export interface GameSession {
   readonly kind: "solo" | "hotseat" | "online";
   getState(): GameState;
+  /** True while an AI turn is being presented with pauses. */
+  getAiPlaying(): boolean;
   subscribe(listener: (state: GameState) => void): () => void;
   roll(): void;
   continueTurn(): void;
+  skipHospitalTurn(): void;
   buy(): void;
   declineBuy(): void;
   upgrade(special?: SpecialKind): void;
   declineUpgrade(): void;
   airportStay(): void;
-  airportBeginFly(): void;
+  airportBeginFly(usePlane?: boolean): void;
   airportFlyTo(tileIndex: number): void;
   cancelAirportDest(): void;
   portStay(): void;
   portSail(useShip: boolean): void;
+  freeSailTo(tileIndex: number): void;
   sellFacility(): void;
   keepFacility(): void;
   useDischargeCard(): void;
   acceptHospital(): void;
   useRentFree(): void;
   declineRentFree(): void;
-  portDispatchTakeCash(): void;
-  portDispatchTakeShip(): void;
   cancelForceAuction(): void;
   proceedForceAuction(): void;
   pickForceAuctionTile(tileIndex: number): void;
@@ -95,12 +98,16 @@ export interface GameSession {
   load?(raw: string): void;
 }
 
-function aiPickAirportDest(state: GameState, free: boolean): number | null {
+function aiPickAirportDest(
+  state: GameState,
+  free: boolean,
+  usePlane: boolean,
+): number | null {
   const player = currentPlayer(state);
   const candidates = propertyTiles(state)
     .map((t) => ({
       t,
-      fare: free ? 0 : (t.price ?? 0) * 3,
+      fare: airportFare(t.price ?? 0, { free, usePlane }),
       unowned: state.deeds[t.index]?.ownerId == null,
     }))
     .filter((c) => c.fare <= player.cash)
@@ -224,25 +231,50 @@ function aiResolveSettle(state: GameState): GameState {
     }
 
     if (s.prompt.kind === "port") {
-      if (player.hasShip && player.cash >= 200) s = portSail(s, true);
-      else if (player.cash >= 1000) s = portSail(s, false);
+      if (player.hasShip) s = portSail(s, true);
+      else if (player.cash >= 200) s = portSail(s, false);
+      else s = portStay(s);
+      continue;
+    }
+
+    if (s.prompt.kind === "freeSail") {
+      const ports = s.tiles.filter(
+        (t) => t.kind === "port" && t.index !== player.position,
+      );
+      const dest = ports[0];
+      if (dest) s = freeSailTo(s, dest.index);
       else s = portStay(s);
       continue;
     }
 
     if (s.prompt.kind === "airport" || s.prompt.kind === "freeFlight") {
       const free = s.prompt.kind === "freeFlight";
-      const dest = aiPickAirportDest(s, free);
-      if (dest == null) s = airportStay(s);
-      else {
-        s = airportBeginFly(s);
+      const usePlane = !free && player.hasPlane;
+      const dest = aiPickAirportDest(s, free, usePlane);
+      if (dest == null) {
+        // Holding a plane but can't afford ×1? try ×2 without token
+        if (!free && usePlane) {
+          const destFull = aiPickAirportDest(s, false, false);
+          if (destFull != null) {
+            s = airportBeginFly(s, false);
+            s = airportFlyTo(s, destFull);
+            continue;
+          }
+        }
+        s = airportStay(s);
+      } else {
+        s = airportBeginFly(s, usePlane);
         s = airportFlyTo(s, dest);
       }
       continue;
     }
 
     if (s.prompt.kind === "airportDest") {
-      const dest = aiPickAirportDest(s, s.prompt.free);
+      const dest = aiPickAirportDest(
+        s,
+        s.prompt.free,
+        s.prompt.usePlane,
+      );
       if (dest == null) {
         s = cancelAirportDest(s);
         s = airportStay(s);
@@ -259,11 +291,6 @@ function aiResolveSettle(state: GameState): GameState {
 
     if (s.prompt.kind === "rentFree") {
       s = useRentFree(s);
-      continue;
-    }
-
-    if (s.prompt.kind === "portDispatch") {
-      s = player.hasShip ? portDispatchTakeCash(s) : portDispatchTakeShip(s);
       continue;
     }
 
@@ -342,34 +369,60 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     for (const l of listeners) l(state);
   };
 
+  /** Beat between AI presentation steps (focus / roll / settle / end). */
+  const AI_BEAT_MS = 200;
+  let aiPlaying = false;
+  let aiRunId = 0;
+
+  const beat = (runId: number) =>
+    new Promise<boolean>((resolve) => {
+      globalThis.setTimeout(() => resolve(runId === aiRunId), AI_BEAT_MS);
+    });
+
+  const setAiPlaying = (v: boolean) => {
+    if (aiPlaying === v) return;
+    aiPlaying = v;
+    emit();
+  };
+
   let auctionEpoch = 0;
 
   /** After AI settle becomes idle (e.g. auction done), close turn and chain. */
-  const finishAiSettleAndContinue = () => {
-    if (state.winnerId) return;
+  const finishAiSettleAndContinue = async (runId: number) => {
+    if (runId !== aiRunId || state.winnerId) {
+      setAiPlaying(false);
+      return;
+    }
 
     // Close settle even if current player just went bankrupt (estate auctions done).
     if (state.phase === "settle" && state.prompt.kind === "idle") {
       state = finishSettlement(state);
     }
     if (state.phase === "end") {
+      // Show settle result, then end turn.
+      if (!(await beat(runId))) return;
       state = endTurn(state);
       emit();
-      queueMicrotask(runAiIfNeeded);
+      await runAiIfNeeded();
       return;
     }
 
     const cur = state.players[state.currentPlayerIndex]!;
-    if (cur.kind !== "ai" || cur.eliminated) return;
+    if (cur.kind !== "ai" || cur.eliminated) {
+      setAiPlaying(false);
+    }
   };
 
-  const continueAiAuctionIfNeeded = () => {
-    if (state.winnerId) return;
+  const continueAiAuctionIfNeeded = async (runId: number) => {
+    if (runId !== aiRunId || state.winnerId) {
+      setAiPlaying(false);
+      return;
+    }
     const epoch = auctionEpoch;
 
     // Already finished — just advance AI turn (no error log)
     if (state.prompt.kind !== "auction") {
-      finishAiSettleAndContinue();
+      await finishAiSettleAndContinue(runId);
       return;
     }
 
@@ -382,18 +435,21 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       // Recover desynced auction quietly (sale often already logged)
       state = { ...state, auction: null, prompt: { kind: "idle" } };
       emit();
-      finishAiSettleAndContinue();
+      await finishAiSettleAndContinue(runId);
       return;
     }
 
     if (actor.kind !== "ai") {
+      setAiPlaying(false);
       return;
     }
+
+    if (!(await beat(runId))) return;
 
     const before = settleKey(state);
     state = aiAuctionStep(state);
     emit();
-    if (epoch !== auctionEpoch) return;
+    if (epoch !== auctionEpoch || runId !== aiRunId) return;
 
     if (settleKey(state) === before && state.prompt.kind === "auction") {
       state = auctionDoPass(state);
@@ -401,16 +457,20 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     }
 
     if (state.prompt.kind === "auction") {
-      queueMicrotask(continueAiAuctionIfNeeded);
+      await continueAiAuctionIfNeeded(runId);
     } else {
-      finishAiSettleAndContinue();
+      await finishAiSettleAndContinue(runId);
     }
   };
 
-  const runAiIfNeeded = () => {
-    if (state.winnerId) return;
+  const runAiIfNeeded = async () => {
+    const runId = ++aiRunId;
+    if (state.winnerId) {
+      setAiPlaying(false);
+      return;
+    }
 
-    // Opening order: auto-roll for AI actors only
+    // Opening order: auto-roll for AI actors only (keep snappy)
     if (state.phase === "initiative") {
       let guard = 0;
       while (state.phase === "initiative" && guard++ < 80) {
@@ -422,14 +482,18 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
         emit();
       }
       // Still waiting on a human roll — stop. If finalize flipped to "roll", fall through.
-      if (state.phase === "initiative") return;
+      if (state.phase === "initiative") {
+        setAiPlaying(false);
+        return;
+      }
     }
 
     const p = state.players[state.currentPlayerIndex]!;
 
     // Estate / debt auctions may run while current player is already eliminated.
     if (state.phase === "settle" && state.prompt.kind === "auction") {
-      queueMicrotask(continueAiAuctionIfNeeded);
+      setAiPlaying(true);
+      await continueAiAuctionIfNeeded(runId);
       return;
     }
 
@@ -440,12 +504,19 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       if (state.phase === "end") {
         state = endTurn(state);
         emit();
-        queueMicrotask(runAiIfNeeded);
+        await runAiIfNeeded();
+      } else {
+        setAiPlaying(false);
       }
       return;
     }
 
-    if (p.kind !== "ai") return;
+    if (p.kind !== "ai") {
+      setAiPlaying(false);
+      return;
+    }
+
+    setAiPlaying(true);
 
     // Resume mid-settle (e.g. after human auction bid ended)
     if (state.phase === "settle") {
@@ -454,11 +525,11 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
         emit();
         if (state.prompt.kind === "auction") {
           auctionEpoch += 1;
-          queueMicrotask(continueAiAuctionIfNeeded);
+          await continueAiAuctionIfNeeded(runId);
           return;
         }
         if (state.prompt.kind === "idle") {
-          finishAiSettleAndContinue();
+          await finishAiSettleAndContinue(runId);
           return;
         }
         state = {
@@ -471,77 +542,94 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
           ].slice(0, 60),
         };
         emit();
-        finishAiSettleAndContinue();
+        await finishAiSettleAndContinue(runId);
         return;
       }
-      finishAiSettleAndContinue();
+      await finishAiSettleAndContinue(runId);
       return;
     }
 
     if (state.phase === "end") {
       state = endTurn(state);
       emit();
-      queueMicrotask(runAiIfNeeded);
+      await runAiIfNeeded();
       return;
     }
 
+    // --- Presented AI turn from roll ---
+    // 1) Focus: current token already enlarged after endTurn; pause.
+    if (!(await beat(runId))) return;
+
+    // 2) Roll (HUD dice / hospital skip log)
     state = rollDice(state);
+    emit();
+    if (!(await beat(runId))) return;
+
+    // 3) Move is applied inside rollDice; resolve settle + show result
     if (state.phase === "settle") {
       state = aiResolveSettle(state);
       if (state.phase === "settle" && state.prompt.kind === "idle") {
         state = finishSettlement(state);
       }
-    }
-    emit();
+      emit();
 
-    if (state.prompt.kind === "auction") {
-      auctionEpoch += 1;
-      queueMicrotask(continueAiAuctionIfNeeded);
-      return;
+      if (state.prompt.kind === "auction") {
+        auctionEpoch += 1;
+        await continueAiAuctionIfNeeded(runId);
+        return;
+      }
+
+      if (!(await beat(runId))) return;
     }
 
+    // 4) End turn → next player (focus pause happens at start of next AI turn)
     if (state.phase === "end") {
       state = endTurn(state);
       emit();
     }
 
-    queueMicrotask(() => {
-      const n = state.players[state.currentPlayerIndex]!;
-      if (
-        !state.winnerId &&
-        n.kind === "ai" &&
-        !n.eliminated &&
-        state.phase === "roll"
-      ) {
-        runAiIfNeeded();
-      }
-    });
+    if (runId !== aiRunId) return;
+
+    const n = state.players[state.currentPlayerIndex]!;
+    if (
+      !state.winnerId &&
+      n.kind === "ai" &&
+      !n.eliminated &&
+      (state.phase === "roll" || state.phase === "end")
+    ) {
+      await runAiIfNeeded();
+      return;
+    }
+
+    setAiPlaying(false);
   };
 
   const afterHumanAuction = () => {
     emit();
-    queueMicrotask(() => {
+    void (async () => {
       if (state.prompt.kind === "auction") {
         auctionEpoch += 1;
-        continueAiAuctionIfNeeded();
+        setAiPlaying(true);
+        await continueAiAuctionIfNeeded(++aiRunId);
         return;
       }
       const cur = state.players[state.currentPlayerIndex]!;
       if (cur.kind === "ai") {
-        finishAiSettleAndContinue();
-        return;
+        setAiPlaying(true);
+        await finishAiSettleAndContinue(++aiRunId);
       }
-    });
+    })();
   };
 
-
-
   // Opening order may put an AI first — start their turn
-  queueMicrotask(runAiIfNeeded);
+  queueMicrotask(() => {
+    void runAiIfNeeded();
+  });
 
   return {
     kind: "solo",
     getState: () => state,
+    getAiPlaying: () => aiPlaying,
     subscribe(listener) {
       listeners.add(listener);
       listener(state);
@@ -557,7 +645,7 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
         if (!actor || actor.kind !== "human") return;
         state = rollInitiative(state);
         emit();
-        queueMicrotask(runAiIfNeeded);
+        void runAiIfNeeded();
         return;
       }
       if (
@@ -570,7 +658,7 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
         state = continuePairRoll(state);
         emit();
         if (state.prompt.kind === "auction") {
-          queueMicrotask(continueAiAuctionIfNeeded);
+          void runAiIfNeeded();
         }
         return;
       }
@@ -579,7 +667,7 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       state = rollDice(state);
       emit();
       if (state.prompt.kind === "auction") {
-        queueMicrotask(continueAiAuctionIfNeeded);
+        void runAiIfNeeded();
       }
     },
     continueTurn() {
@@ -589,13 +677,23 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
         state = finishSettlement(state);
         state = endTurn(state);
         emit();
-        queueMicrotask(runAiIfNeeded);
+        void runAiIfNeeded();
       } else if (state.phase === "end") {
         // Allow unsticking AI end-phase as well
         state = endTurn(state);
         emit();
-        queueMicrotask(runAiIfNeeded);
+        void runAiIfNeeded();
       }
+    },
+    skipHospitalTurn() {
+      if (state.winnerId) return;
+      const p = state.players[state.currentPlayerIndex]!;
+      if (p.kind !== "human" || state.phase !== "roll" || p.hospitalSkips <= 0) {
+        return;
+      }
+      state = skipHospitalTurn(state);
+      emit();
+      void runAiIfNeeded();
     },
     buy() {
       state = chooseBuy(state);
@@ -617,15 +715,15 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       state = airportStay(state);
       emit();
     },
-    airportBeginFly() {
-      state = airportBeginFly(state);
+    airportBeginFly(usePlane = false) {
+      state = airportBeginFly(state, usePlane);
       emit();
     },
     airportFlyTo(tileIndex: number) {
       state = airportFlyTo(state, tileIndex);
       emit();
       if (state.prompt.kind === "auction") {
-        queueMicrotask(continueAiAuctionIfNeeded);
+        void runAiIfNeeded();
       }
     },
     cancelAirportDest() {
@@ -638,6 +736,10 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     },
     portSail(useShip: boolean) {
       state = portSail(state, useShip);
+      emit();
+    },
+    freeSailTo(tileIndex: number) {
+      state = freeSailTo(state, tileIndex);
       emit();
     },
     sellFacility() {
@@ -664,16 +766,8 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       state = declineRentFree(state);
       emit();
       if (state.prompt.kind === "debtAuctionPick" || state.prompt.kind === "auction") {
-        queueMicrotask(continueAiAuctionIfNeeded);
+        void runAiIfNeeded();
       }
-    },
-    portDispatchTakeCash() {
-      state = portDispatchTakeCash(state);
-      emit();
-    },
-    portDispatchTakeShip() {
-      state = portDispatchTakeShip(state);
-      emit();
     },
     cancelForceAuction() {
       state = cancelForceAuction(state);
@@ -711,7 +805,7 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       state = acceptMafiaEnter(state);
       emit();
       if (state.prompt.kind === "auction" || state.prompt.kind === "debtAuctionPick") {
-        queueMicrotask(continueAiAuctionIfNeeded);
+        void runAiIfNeeded();
       }
     },
     pickGunBuild(tileIndex: number) {
@@ -730,7 +824,7 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       state = chooseRacetrackExit(state, tileIndex);
       emit();
       if (state.prompt.kind === "auction") {
-        queueMicrotask(continueAiAuctionIfNeeded);
+        void runAiIfNeeded();
       }
     },
     skipSwap() {
@@ -747,7 +841,7 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     load(raw: string) {
       state = JSON.parse(raw) as GameState;
       emit();
-      queueMicrotask(runAiIfNeeded);
+      void runAiIfNeeded();
     },
   };
 }

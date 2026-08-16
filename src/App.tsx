@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import boardUrl from "@assets/board-map-v7.png";
-import { BOARD_PNG, tileCenterPercent, tileContinentBarPercent, tileRectPercent } from "./engine/board";
+import { BOARD_PNG, LEGEND_CONTINENTS, legendContinentSwatchPercent, tileCenterPercent, tileContinentBarPercent, tileRectPercent } from "./engine/board";
 import { CARD_ZH } from "./engine/deck";
+import { continentControllerId } from "./engine/deeds";
 import {
   getAuctionView,
   gunBuildOptions,
@@ -81,10 +82,18 @@ function DiceReadout({
 export default function App() {
   const session = useMemo(() => createSoloSession({ humans: 1, ais: 3 }), []);
   const [state, setState] = useState<GameState>(() => session.getState());
+  const [aiPlaying, setAiPlaying] = useState(() => session.getAiPlaying());
   const boardFrameRef = useRef<HTMLDivElement>(null);
   const [boardScale, setBoardScale] = useState(1);
 
-  useEffect(() => session.subscribe(setState), [session]);
+  useEffect(
+    () =>
+      session.subscribe((s) => {
+        setState(s);
+        setAiPlaying(session.getAiPlaying());
+      }),
+    [session],
+  );
 
   useEffect(() => {
     const el = boardFrameRef.current;
@@ -121,7 +130,8 @@ export default function App() {
   const prompt = state.prompt;
 
   const humanTurn =
-    (current.kind === "human" && !state.winnerId) || humanBidding;
+    ((current.kind === "human" && !state.winnerId) || humanBidding) &&
+    !aiPlaying;
   const humanPairRoll =
     state.phase === "settle" &&
     (prompt.kind === "trackJudge" || prompt.kind === "casinoRoll") &&
@@ -133,15 +143,25 @@ export default function App() {
     !!initiativeActor &&
     initiativeActor.kind === "human" &&
     !state.winnerId;
+  const hospitalSkipTurn =
+    current.kind === "human" &&
+    !state.winnerId &&
+    state.phase === "roll" &&
+    current.hospitalSkips > 0;
+
   const canRoll =
     !state.winnerId &&
+    !aiPlaying &&
+    !hospitalSkipTurn &&
     (humanInitiative ||
       humanPairRoll ||
       (current.kind === "human" && state.phase === "roll"));
   const canContinue =
     current.kind === "human" &&
     !state.winnerId &&
+    !aiPlaying &&
     !humanPairRoll &&
+    !hospitalSkipTurn &&
     ((state.phase === "settle" && state.prompt.kind === "idle") ||
       state.phase === "end");
 
@@ -176,11 +196,15 @@ export default function App() {
       prompt.kind === "airportDest" ||
       prompt.kind === "forceAuctionPick" ||
       prompt.kind === "debtAuctionPick" ||
-      prompt.kind === "swap");
+      prompt.kind === "swap" ||
+      prompt.kind === "port" ||
+      prompt.kind === "freeSail");
 
   const phaseLabel = state.winnerId
     ? "终局"
-    : state.phase === "initiative"
+    : aiPlaying
+      ? `AI 演示 · ${current.name}`
+      : state.phase === "initiative"
       ? "定出发顺序"
       : humanPairRoll
         ? prompt.kind === "trackJudge"
@@ -189,7 +213,9 @@ export default function App() {
         : current.racetrackPos != null && state.phase === "roll"
           ? "跑马场掷骰"
           : state.phase === "roll"
-            ? "掷骰"
+            ? current.hospitalSkips > 0
+              ? "住院跳过"
+              : "掷骰"
             : state.phase === "settle"
               ? "结算"
               : "回合结束";
@@ -291,9 +317,13 @@ export default function App() {
                       }}
                     >
                       <span className="deed-stamp-ring" aria-hidden />
-                      {tile.kind === "facility" ? (
+                      {tile.kind === "facility" || tile.kind === "port" ? (
                         <span className="deed-stamp-label">
-                          {tile.zh === "石油" ? "油" : "矿"}
+                          {tile.kind === "port"
+                            ? "港"
+                            : tile.zh === "油田"
+                              ? "油"
+                              : "矿"}
                         </span>
                       ) : null}
                     </div>
@@ -389,6 +419,36 @@ export default function App() {
               })()}
             </div>
 
+            <div className="legend-owners" aria-hidden={false}>
+              {LEGEND_CONTINENTS.map((c, i) => {
+                const ownerId = continentControllerId(
+                  state.tiles,
+                  state.deeds,
+                  c.id,
+                );
+                if (!ownerId) return null;
+                const owner = state.players.find((p) => p.id === ownerId);
+                if (!owner) return null;
+                const sw = legendContinentSwatchPercent(i);
+                return (
+                  <div
+                    key={c.id}
+                    className="legend-owner"
+                    title={`${c.zh} · 完整控制：${owner.name}（${owner.id}）`}
+                    style={{
+                      left: `${sw.left}%`,
+                      top: `${sw.top}%`,
+                      width: `${sw.width}%`,
+                      height: `${sw.height}%`,
+                      background: owner.color,
+                    }}
+                  >
+                    <span className="legend-owner-id">{owner.id}</span>
+                  </div>
+                );
+              })}
+            </div>
+
             <div
               className="plaza-hud"
               style={{
@@ -445,14 +505,15 @@ export default function App() {
                       <div className="pinventory">
                         <span
                           className={`inv${p.hasPlane ? " on" : ""}`}
-                          title="飞机 token：银行禁领薪"
+                          title="飞机 token：下次机场可原价机票"
+                          aria-label="飞机"
                         >
                           <IconPlane className="inv-ico" />
                           飞机
                         </span>
                         <span
                           className={`inv${p.hasShip ? " on" : ""}`}
-                          title="轮船 token：港口减船费"
+                          title="轮船 token：下次港口可免票"
                         >
                           <IconShip className="inv-ico" />
                           轮船
@@ -513,6 +574,16 @@ export default function App() {
               </ul>
             </div>
             <div className="step-ops">
+          {aiPlaying && (
+            <div className="panel choice">
+              <div className="label">AI 回合</div>
+              <p>
+                {current.name} 操作中…
+                {state.lastDice != null ? ` · 骰子 ${state.lastDice}` : ""}
+              </p>
+            </div>
+          )}
+
           {state.winnerId && (
             <div className="panel choice victory">
               <div className="label">胜利</div>
@@ -575,7 +646,9 @@ export default function App() {
           {humanTurn && prompt.kind === "buy" && buyTile && (
             <div className="panel choice">
               <div className="label">
-                {buyTile.kind === "facility" ? "无主设施" : "无主地产"}
+                {buyTile.kind === "facility" || buyTile.kind === "port"
+                  ? "无主设施"
+                  : "无主地产"}
               </div>
               <p>
                 购买 {buyTile.zh}？
@@ -608,7 +681,11 @@ export default function App() {
 
           {humanTurn && prompt.kind === "facilityOwn" && (
             <div className="panel choice">
-              <div className="label">己方设施</div>
+              <div className="label">
+                {state.tiles[prompt.tileIndex]?.kind === "port"
+                  ? "己方港口"
+                  : "己方设施"}
+              </div>
               <p>
                 {state.tiles[prompt.tileIndex]?.zh} · 可半价{" "}
                 <Money amount={500} /> 退回 GM
@@ -630,26 +707,36 @@ export default function App() {
 
           {humanTurn && prompt.kind === "port" && (
             <div className="panel choice">
-              <div className="label">港口</div>
-              <p>
-                出航船费 <Money amount={400} />；轮船 token 可实付{" "}
-                <Money amount={200} />。出航后回合结束。
+              <div className="label">港口出航</div>
+              <p className="hint-one-line">
+                {current.hasShip
+                  ? "船费200 · 可用轮船token免票 · 出航后结束回合"
+                  : "船费200 · 出航后得轮船token并结束回合"}
               </p>
               <div className="actions">
-                <button
-                  type="button"
-                  disabled={current.cash < 400}
-                  onClick={() => session.portSail(false)}
-                >
-                  出航 <Money amount={400} />
-                </button>
-                {current.hasShip && (
+                {current.hasShip ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => session.portSail(true)}
+                    >
+                      免票出航
+                    </button>
+                    <button
+                      type="button"
+                      disabled={current.cash < 200}
+                      onClick={() => session.portSail(false)}
+                    >
+                      付费出航 <Money amount={200} />
+                    </button>
+                  </>
+                ) : (
                   <button
                     type="button"
                     disabled={current.cash < 200}
-                    onClick={() => session.portSail(true)}
+                    onClick={() => session.portSail(false)}
                   >
-                    用轮船 <Money amount={200} />
+                    出航 <Money amount={200} />
                   </button>
                 )}
                 <button
@@ -751,16 +838,37 @@ export default function App() {
                 </div>
                 <p>
                   {prompt.kind === "freeFlight"
-                    ? "可选任意国家地产免费飞往，并领取飞机 token。"
-                    : "可付地价×3飞往任意国家地产（获得飞机 token）。"}
+                    ? current.hasPlane
+                      ? "可免费飞往任意国家地产（已有飞机 token，不再另发）。"
+                      : "可免费飞往任意国家地产，并领取飞机 token。"
+                    : current.hasPlane
+                      ? "机票默认地价×2；可用飞机 token 按原价飞（用后收回）。"
+                      : "机票为地价×2；起飞后获得飞机 token。"}
                 </p>
                 <div className="actions">
-                  <button
-                    type="button"
-                    onClick={() => session.airportBeginFly()}
-                  >
-                    起飞
-                  </button>
+                  {prompt.kind === "airport" && current.hasPlane ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => session.airportBeginFly(true)}
+                      >
+                        用飞机 token（原价）
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => session.airportBeginFly(false)}
+                      >
+                        不用 token（×2）
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => session.airportBeginFly(false)}
+                    >
+                      起飞
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="secondary"
@@ -775,11 +883,20 @@ export default function App() {
           {humanTurn && prompt.kind === "airportDest" && (
             <div className="panel choice dest-list">
               <div className="label">
-                选择目的地{prompt.free ? "（免费）" : ""}
+                选择目的地
+                {prompt.free
+                  ? "（免费）"
+                  : prompt.usePlane
+                    ? "（原价·用飞机 token）"
+                    : "（地价×2）"}
               </div>
               <ul>
                 {propertyTiles(state).map((t) => {
-                  const fare = prompt.free ? 0 : (t.price ?? 0) * 3;
+                  const fare = prompt.free
+                    ? 0
+                    : prompt.usePlane
+                      ? (t.price ?? 0)
+                      : (t.price ?? 0) * 2;
                   const can = current.cash >= fare;
                   return (
                     <li key={t.index}>
@@ -858,25 +975,35 @@ export default function App() {
             </div>
           )}
 
-          {humanTurn && prompt.kind === "portDispatch" && (
+          {humanTurn && prompt.kind === "freeSail" && (
             <div className="panel choice">
-              <div className="label">港口调度</div>
-              <p>
-                领取 <Money amount={100} />，或领取轮船 token（已有则不可领船）。
+              <div className="label">港口贵宾（免费出航）</div>
+              <p className="hint-one-line">
+                {current.hasShip
+                  ? "免费前往港口（已有轮船token，不再另发）· 出航后结束"
+                  : "免费前往港口并领取轮船token · 出航后结束"}
               </p>
               <div className="actions">
+                {state.tiles
+                  .filter(
+                    (t) =>
+                      t.kind === "port" && t.index !== current.position,
+                  )
+                  .map((t) => (
+                    <button
+                      key={t.index}
+                      type="button"
+                      onClick={() => session.freeSailTo(t.index)}
+                    >
+                      前往 {t.zh}
+                    </button>
+                  ))}
                 <button
                   type="button"
-                  onClick={() => session.portDispatchTakeCash()}
+                  className="secondary"
+                  onClick={() => session.portStay()}
                 >
-                  拿 <Money amount={100} />
-                </button>
-                <button
-                  type="button"
-                  disabled={current.hasShip}
-                  onClick={() => session.portDispatchTakeShip()}
-                >
-                  领轮船 token
+                  不出航
                 </button>
               </div>
             </div>
@@ -1157,20 +1284,28 @@ export default function App() {
           </div>
 
           <div className="actions main-actions">
-            <button
-              type="button"
-              disabled={!canRoll}
-              onClick={() => session.roll()}
-            >
-              {rollButtonLabel}
-            </button>
-            <button
-              type="button"
-              disabled={!canContinue}
-              onClick={() => session.continueTurn()}
-            >
-              继续 Continue
-            </button>
+            {hospitalSkipTurn ? (
+              <button type="button" onClick={() => session.skipHospitalTurn()}>
+                跳过本回合（住院剩余 {current.hospitalSkips}）
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  disabled={!canRoll}
+                  onClick={() => session.roll()}
+                >
+                  {rollButtonLabel}
+                </button>
+                <button
+                  type="button"
+                  disabled={!canContinue}
+                  onClick={() => session.continueTurn()}
+                >
+                  继续 Continue
+                </button>
+              </>
+            )}
           </div>
               </div>
 
