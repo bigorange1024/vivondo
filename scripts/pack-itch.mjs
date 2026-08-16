@@ -8,6 +8,7 @@ import {
   cp,
   mkdir,
   rm,
+  rename,
   writeFile,
   access,
 } from "node:fs/promises";
@@ -17,6 +18,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dist = path.join(root, "dist");
 const outDir = path.join(root, "release", "vivondo-itch");
+const staging = path.join(root, "release", "vivondo-itch-staging");
 const zipPath = path.join(root, "release", "vivondo-itch.zip");
 
 async function exists(p) {
@@ -24,6 +26,16 @@ async function exists(p) {
     await access(p);
     return true;
   } catch {
+    return false;
+  }
+}
+
+async function rmSafe(p) {
+  try {
+    await rm(p, { recursive: true, force: true });
+    return true;
+  } catch (e) {
+    console.warn(`  (skip remove ${path.basename(p)}: ${e.message})`);
     return false;
   }
 }
@@ -36,17 +48,18 @@ if (!(await exists(path.join(dist, "index.html")))) {
   process.exit(1);
 }
 
-await rm(outDir, { recursive: true, force: true });
-await mkdir(outDir, { recursive: true });
-await cp(dist, outDir, { recursive: true });
+await mkdir(path.join(root, "release"), { recursive: true });
+await rmSafe(staging);
+await mkdir(staging, { recursive: true });
+await cp(dist, staging, { recursive: true });
 
-await cp(path.join(root, "docs", "EULA.md"), path.join(outDir, "EULA.md"));
+await cp(path.join(root, "docs", "EULA.md"), path.join(staging, "EULA.md"));
 await cp(
   path.join(root, "docs", "ITCH_PAGE.md"),
-  path.join(outDir, "ITCH_PAGE.md"),
+  path.join(staging, "ITCH_PAGE.md"),
 );
 
-const licDir = path.join(outDir, "licenses", "fonts");
+const licDir = path.join(staging, "licenses", "fonts");
 await mkdir(licDir, { recursive: true });
 for (const f of [
   "OFL-NotoSansSC.txt",
@@ -58,7 +71,7 @@ for (const f of [
 }
 
 await writeFile(
-  path.join(outDir, "PLAY.txt"),
+  path.join(staging, "PLAY.txt"),
   [
     "花花世界 / Vivondo — 玩家包说明",
     "================================",
@@ -76,7 +89,7 @@ await writeFile(
     "",
     "【方式 B · 命令行】",
     "  cd 到本文件夹后执行：",
-    "  npx --yes serve -l 4173 .",
+    "  npx --yes serve -p 4173 .",
     "  浏览器打开 http://127.0.0.1:4173/",
     "",
     "【重要 · 存档】",
@@ -110,21 +123,29 @@ await writeFile(
 
 await cp(
   path.join(root, "scripts", "itch-play.bat"),
-  path.join(outDir, "play.bat"),
+  path.join(staging, "play.bat"),
 );
 
-await mkdir(path.join(root, "release"), { recursive: true });
-await rm(zipPath, { force: true });
-
+await rmSafe(zipPath);
 if (process.platform === "win32") {
   execSync(
-    `powershell -NoProfile -Command "Compress-Archive -Path '${outDir}\\*' -DestinationPath '${zipPath}' -Force"`,
+    `powershell -NoProfile -Command "Compress-Archive -Path '${staging}\\*' -DestinationPath '${zipPath}' -Force"`,
     { stdio: "inherit" },
   );
 } else {
-  execSync(`cd "${path.join(root, "release")}" && zip -r vivondo-itch.zip vivondo-itch`, {
-    stdio: "inherit",
-  });
+  execSync(
+    `cd "${path.join(root, "release")}" && zip -r vivondo-itch.zip vivondo-itch-staging`,
+    { stdio: "inherit" },
+  );
+}
+
+if (await rmSafe(outDir)) {
+  await rename(staging, outDir);
+} else {
+  console.warn(
+    "  release/vivondo-itch is locked (close Explorer / play.bat). Zip is still updated.",
+  );
+  console.warn(`  Fresh folder left at: ${staging}`);
 }
 
 console.log("");
