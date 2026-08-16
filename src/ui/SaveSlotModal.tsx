@@ -4,6 +4,7 @@ import {
   listSaveSlots,
   type SaveSlotInfo,
 } from "../persist/saves";
+import { BtnLabel } from "./BtnLabel";
 
 export type SaveModalMode = "save" | "load" | "delete";
 
@@ -42,7 +43,13 @@ export function SaveSlotModal({
   if (!open) return null;
 
   const title =
-    mode === "save" ? "选择存档位保存" : mode === "load" ? "选择存档读取" : "选择存档删除";
+    mode === "save"
+      ? "选择存档位保存"
+      : mode === "load"
+        ? "选择存档读取"
+        : "选择存档删除";
+  const pickEn =
+    mode === "save" ? "Save here" : mode === "load" ? "Load" : "Delete";
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onCancel}>
@@ -71,6 +78,7 @@ export function SaveSlotModal({
                   <span className="save-slot-meta">
                     {info.exists ? formatSaveMeta(info.meta) : "（空）"}
                   </span>
+                  <span className="save-slot-en">{pickEn}</span>
                 </button>
               </li>
             );
@@ -78,7 +86,7 @@ export function SaveSlotModal({
         </ul>
         <div className="modal-actions">
           <button type="button" className="secondary" onClick={onCancel}>
-            取消
+            <BtnLabel zh="取消" en="Cancel" />
           </button>
         </div>
       </div>

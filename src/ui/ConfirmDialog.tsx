@@ -1,11 +1,14 @@
 import { useEffect, useId, useRef } from "react";
+import { BtnLabel } from "./BtnLabel";
 
 export function ConfirmDialog({
   open,
   title,
   message,
   confirmLabel = "确认",
+  confirmEn = "Confirm",
   cancelLabel = "取消",
+  cancelEn = "Cancel",
   danger = false,
   onConfirm,
   onCancel,
@@ -14,7 +17,9 @@ export function ConfirmDialog({
   title: string;
   message: string;
   confirmLabel?: string;
+  confirmEn?: string;
   cancelLabel?: string;
+  cancelEn?: string;
   danger?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -47,7 +52,7 @@ export function ConfirmDialog({
         <p>{message}</p>
         <div className="modal-actions">
           <button type="button" className="secondary" onClick={onCancel}>
-            {cancelLabel}
+            <BtnLabel zh={cancelLabel} en={cancelEn} />
           </button>
           <button
             ref={confirmRef}
@@ -55,7 +60,7 @@ export function ConfirmDialog({
             className={danger ? "danger" : undefined}
             onClick={onConfirm}
           >
-            {confirmLabel}
+            <BtnLabel zh={confirmLabel} en={confirmEn} />
           </button>
         </div>
       </div>

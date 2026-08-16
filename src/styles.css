@@ -79,11 +79,12 @@ body {
 .board-top-strip {
   position: absolute;
   z-index: 25;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: calc(var(--board-scale) * 6px);
-  padding: 0 calc(var(--board-scale) * 8px);
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: start;
+  column-gap: calc(var(--board-scale) * 6px);
+  padding: calc(var(--board-scale) * 1px) calc(var(--board-scale) * 8px) 0;
+  overflow: visible;
   pointer-events: none;
   background: linear-gradient(
     180deg,
@@ -99,13 +100,18 @@ body {
   pointer-events: auto;
 }
 
+.board-top-strip .brand,
+.board-top-strip .top-meta {
+  padding-top: calc(var(--board-scale) * 2px);
+}
+
 .top-menu {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: calc(var(--board-scale) * 4px);
-  flex: 1 1 auto;
-  justify-content: center;
-  min-width: 0;
+  justify-content: flex-start;
+  grid-column: 2;
+  transform: translateY(calc(var(--board-scale) * -1px));
 }
 
 .top-menu-btn {
@@ -114,12 +120,21 @@ body {
   background: #f3ebe0;
   color: #3a2a18;
   font: inherit;
-  font-size: calc(var(--board-scale) * 11px);
+  font-size: calc(var(--board-scale) * 10.5px);
   font-weight: 700;
-  padding: calc(var(--board-scale) * 2px) calc(var(--board-scale) * 8px);
+  padding: calc(var(--board-scale) * 1px) calc(var(--board-scale) * 6px);
   border-radius: 3px;
   cursor: pointer;
-  line-height: 1.2;
+  line-height: 1.05;
+}
+
+.top-menu-btn .btn-label {
+  gap: 0.02em;
+}
+
+.top-menu-btn .btn-en {
+  font-size: 0.62em;
+  opacity: 0.72;
 }
 
 .top-menu-btn:hover {
@@ -168,8 +183,10 @@ body {
   display: flex;
   align-items: baseline;
   gap: calc(var(--board-scale) * 5px);
-  flex: 0 0 auto;
+  grid-column: 1;
+  justify-self: start;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .brand strong {
@@ -185,13 +202,17 @@ body {
 
 .top-meta {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  align-items: center;
   gap: calc(var(--board-scale) * 3px) calc(var(--board-scale) * 7px);
   color: #3f4f5f;
   font-size: calc(var(--board-scale) * 12px);
   font-weight: 600;
+  grid-column: 3;
+  justify-self: stretch;
   min-width: 0;
+  overflow: visible;
 }
 
 .top-meta span {
@@ -476,11 +497,12 @@ body {
   min-width: 0;
   padding: calc(var(--board-scale) * 4px) calc(var(--board-scale) * 2px);
   font-size: calc(var(--board-scale) * 10px);
-  line-height: 1.2;
-  white-space: nowrap;
+  line-height: 1.15;
+  white-space: normal;
   overflow: visible;
   text-overflow: clip;
   letter-spacing: -0.02em;
+  text-align: center;
 }
 
 .actions.auction-actions .money {
@@ -509,11 +531,24 @@ body {
   text-align: center;
   width: 100%;
   min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: calc(var(--board-scale) * 6px) calc(var(--board-scale) * 4px);
+  white-space: normal;
+  overflow: visible;
+  padding: calc(var(--board-scale) * 5px) calc(var(--board-scale) * 4px);
   font-size: calc(var(--board-scale) * 12px);
+}
+
+.dest-btn .btn-label {
+  align-items: center;
+  width: 100%;
+  text-align: center;
+}
+
+.actions.exit-actions .dest-btn .btn-label,
+.actions.main-actions .btn-label,
+.actions.auction-actions .btn-label,
+.top-menu-btn .btn-label {
+  align-items: center;
+  text-align: center;
 }
 
 .auction-panel {
@@ -799,7 +834,7 @@ button.secondary:hover:not(:disabled) {
 /* 中性选择：飞往哪 / 加盖拆房拍卖选哪一块 */
 .dest-btn {
   width: 100%;
-  text-align: left;
+  text-align: center;
   padding: calc(var(--board-scale) * 5px) calc(var(--board-scale) * 7px);
   font-size: calc(var(--board-scale) * 13px);
   font-weight: 600;
@@ -816,7 +851,7 @@ button.secondary:hover:not(:disabled) {
 
 .dest-list .secondary {
   width: 100%;
-  text-align: left;
+  text-align: center;
   font-weight: 600;
 }
 
@@ -894,14 +929,53 @@ button {
   appearance: none;
   border: none;
   border-radius: calc(var(--board-scale) * 5px);
-  padding: calc(var(--board-scale) * 6px) calc(var(--board-scale) * 10px);
+  padding: calc(var(--board-scale) * 5px) calc(var(--board-scale) * 10px);
   font: inherit;
   font-size: calc(var(--board-scale) * 13.5px);
   font-weight: 600;
   cursor: pointer;
   background: #286ec8;
   color: #fff;
-  line-height: 1.25;
+  line-height: 1.2;
+}
+
+.btn-label {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.12em;
+  line-height: 1.15;
+  width: 100%;
+  max-width: 100%;
+  text-align: center;
+}
+
+.btn-zh {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.15em;
+  width: 100%;
+  text-align: center;
+}
+
+.btn-en {
+  display: block;
+  width: 100%;
+  font-size: 0.68em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  opacity: 0.82;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.top-menu-btn .btn-en,
+button.secondary .btn-en {
+  opacity: 0.75;
 }
 
 button:hover:not(:disabled) {
@@ -1164,7 +1238,8 @@ button.danger {
 
 .save-slot-btn {
   width: 100%;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: baseline;
   gap: 10px;
   text-align: left;
@@ -1195,6 +1270,13 @@ button.danger {
 .save-slot-meta {
   font-size: 0.88rem;
   color: #4a5560;
+}
+
+.save-slot-en {
+  font-size: 0.72rem;
+  font-weight: 700;
+  opacity: 0.72;
+  letter-spacing: 0.02em;
 }
 
 .app-toast {

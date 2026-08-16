@@ -113,15 +113,24 @@ export function SetupScreen({
           disabled={error != null}
           onClick={() => onStart(cfg)}
         >
-          开始游戏
+          <span className="btn-label">
+            <span className="btn-zh">开始游戏</span>
+            <span className="btn-en">Start</span>
+          </span>
         </button>
 
         <div className="setup-persist">
           <button type="button" className="secondary" onClick={onOpenLoad}>
-            读取存档
+            <span className="btn-label">
+              <span className="btn-zh">读取存档</span>
+              <span className="btn-en">Load</span>
+            </span>
           </button>
           <button type="button" className="secondary" onClick={onOpenDelete}>
-            删除存档
+            <span className="btn-label">
+              <span className="btn-zh">删除存档</span>
+              <span className="btn-en">Delete</span>
+            </span>
           </button>
         </div>
       </div>

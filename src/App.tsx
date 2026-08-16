@@ -29,6 +29,7 @@ import {
   writeSaveSlot,
 } from "./persist/saves";
 import { createSoloSession, type GameSession } from "./session/solo";
+import { BtnLabel } from "./ui/BtnLabel";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import {
   IconCoin,
@@ -117,6 +118,7 @@ export default function App() {
     message: string;
     danger?: boolean;
     confirmLabel?: string;
+    confirmEn?: string;
     onConfirm: () => void;
   } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -186,6 +188,7 @@ export default function App() {
       message: "将离开当前对局并回到人数选择。未保存进度会丢失。",
       danger: true,
       confirmLabel: "重开",
+      confirmEn: "Restart",
       onConfirm: () => {
         setConfirm(null);
         goSetup();
@@ -238,6 +241,7 @@ export default function App() {
           ? "将覆盖该槽位已有进度，此操作不可撤销。"
           : `写入 save/slot-${slot}.json（开发服务可用时）。`,
         confirmLabel: "保存",
+        confirmEn: "Save",
         onConfirm: () => {
           setConfirm(null);
           void applySave(slot);
@@ -253,6 +257,7 @@ export default function App() {
           ? "将丢弃当前未保存进度，并恢复该存档盘面。"
           : "将加载该存档并进入游戏。",
         confirmLabel: "读取",
+        confirmEn: "Load",
         onConfirm: () => {
           setConfirm(null);
           void applyLoad(slot);
@@ -266,6 +271,7 @@ export default function App() {
       message: "将删除本地存档文件，此操作不可撤销。",
       danger: true,
       confirmLabel: "删除",
+      confirmEn: "Delete",
       onConfirm: () => {
         setConfirm(null);
         void applyDelete(slot);
@@ -287,6 +293,7 @@ export default function App() {
         message={confirm?.message ?? ""}
         danger={confirm?.danger}
         confirmLabel={confirm?.confirmLabel}
+        confirmEn={confirm?.confirmEn}
         onCancel={() => setConfirm(null)}
         onConfirm={() => confirm?.onConfirm()}
       />
@@ -423,12 +430,16 @@ function GameTable({
 
   const rollButtonLabel = (() => {
     if (humanEventMove) {
-      return prompt.direction === "back" ? "掷骰决定后退" : "掷骰决定前进";
+      return prompt.direction === "back"
+        ? { zh: "掷骰决定后退", en: "Roll back" }
+        : { zh: "掷骰决定前进", en: "Roll forward" };
     }
     if (state.phase === "initiative" || humanPairRoll) {
-      return pairFirst == null ? "掷第 1 次骰子" : "掷第 2 次骰子";
+      return pairFirst == null
+        ? { zh: "掷第 1 次骰子", en: "1st die" }
+        : { zh: "掷第 2 次骰子", en: "2nd die" };
     }
-    return "掷骰 Roll";
+    return { zh: "掷骰", en: "Roll" };
   })();
 
   const playHeightRatio = BOARD_PNG.playSize / BOARD_PNG.height;
@@ -515,16 +526,16 @@ function GameTable({
               </div>
               <div className="top-menu">
                 <button type="button" className="top-menu-btn" onClick={onRestart}>
-                  重开
+                  <BtnLabel zh="重开" en="Restart" />
                 </button>
                 <button type="button" className="top-menu-btn" onClick={onSave}>
-                  保存
+                  <BtnLabel zh="保存" en="Save" />
                 </button>
                 <button type="button" className="top-menu-btn" onClick={onLoad}>
-                  读取
+                  <BtnLabel zh="读取" en="Load" />
                 </button>
                 <button type="button" className="top-menu-btn" onClick={onDelete}>
-                  删除
+                  <BtnLabel zh="删除" en="Delete" />
                 </button>
               </div>
               <div className="top-meta">
@@ -1010,14 +1021,14 @@ function GameTable({
                   disabled={current.cash < (buyTile.price ?? 0)}
                   onClick={() => session.buy()}
                 >
-                  购买
+                  <BtnLabel zh="购买" en="Buy" />
                 </button>
                 <button
                   type="button"
                   className="secondary"
                   onClick={() => session.declineBuy()}
                 >
-                  不买
+                  <BtnLabel zh="不买" en="Don't buy" />
                 </button>
               </div>
             </div>
@@ -1036,14 +1047,14 @@ function GameTable({
               </p>
               <div className="actions">
                 <button type="button" onClick={() => session.sellFacility()}>
-                  半价退回
+                  <BtnLabel zh="半价退回" en="Sell back at half price" />
                 </button>
                 <button
                   type="button"
                   className="secondary"
                   onClick={() => session.keepFacility()}
                 >
-                  保留
+                  <BtnLabel zh="保留" en="Keep facility" />
                 </button>
               </div>
             </div>
@@ -1064,14 +1075,14 @@ function GameTable({
                       type="button"
                       onClick={() => session.portSail(true)}
                     >
-                      免票出航
+                      <BtnLabel zh="免票出航" en="Sail with ship token" />
                     </button>
                     <button
                       type="button"
                       disabled={current.cash < 200}
                       onClick={() => session.portSail(false)}
                     >
-                      付费出航 <Money amount={200} />
+                      <BtnLabel zh={<>付费出航 <Money amount={200} /></>} en="Sail · pay 200" />
                     </button>
                   </>
                 ) : (
@@ -1080,7 +1091,7 @@ function GameTable({
                     disabled={current.cash < 200}
                     onClick={() => session.portSail(false)}
                   >
-                    出航 <Money amount={200} />
+                    <BtnLabel zh={<>出航 <Money amount={200} /></>} en="Sail · pay 200" />
                   </button>
                 )}
                 <button
@@ -1088,7 +1099,7 @@ function GameTable({
                   className="secondary"
                   onClick={() => session.portStay()}
                 >
-                  停留
+                  <BtnLabel zh="停留" en="Don't sail" />
                 </button>
               </div>
             </div>
@@ -1135,15 +1146,15 @@ function GameTable({
                     disabled={current.cash < prompt.cost}
                     onClick={() => session.upgrade()}
                   >
-                    加盖
+                    <BtnLabel zh="加盖" en="Build a house" />
                   </button>
                 ) : (
                   <>
                     {(
                       [
-                        ["industry", "工业国"],
-                        ["commerce", "商业国"],
-                        ["tourism", "旅游国"],
+                        ["industry", "工业国", "Industry"],
+                        ["commerce", "商业国", "Commerce"],
+                        ["tourism", "旅游国", "Tourism"],
                       ] as const
                     )
                       .filter(
@@ -1151,14 +1162,14 @@ function GameTable({
                           prompt.mode !== "respecialize" ||
                           state.deeds[upgradeTile.index]?.special !== k,
                       )
-                      .map(([k, label]) => (
+                      .map(([k, label, en]) => (
                         <button
                           key={k}
                           type="button"
                           disabled={current.cash < prompt.cost}
                           onClick={() => session.upgrade(k)}
                         >
-                          {label}
+                          <BtnLabel zh={label} en={en} />
                         </button>
                       ))}
                   </>
@@ -1168,14 +1179,8 @@ function GameTable({
                   className="secondary"
                   onClick={() => session.declineUpgrade()}
                 >
-                  跳过
+                  <BtnLabel zh="跳过" en="Skip upgrade" />
                 </button>
-              </div>
-            </div>
-          )}
-
-          {humanTurn &&
-            (prompt.kind === "airport" || prompt.kind === "freeFlight") && (
               <div className="panel choice">
                 <div className="label">
                   {prompt.kind === "freeFlight" ? "机场贵宾（免费）" : "机场"}
@@ -1196,13 +1201,13 @@ function GameTable({
                         type="button"
                         onClick={() => session.airportBeginFly(true)}
                       >
-                        用飞机 token（原价）
+                        <BtnLabel zh="用飞机 token（原价）" en="Fly at list price" />
                       </button>
                       <button
                         type="button"
                         onClick={() => session.airportBeginFly(false)}
                       >
-                        不用 token（×2）
+                        <BtnLabel zh="不用 token（×2）" en="Fly at 2× price" />
                       </button>
                     </>
                   ) : (
@@ -1210,7 +1215,7 @@ function GameTable({
                       type="button"
                       onClick={() => session.airportBeginFly(false)}
                     >
-                      起飞
+                      <BtnLabel zh="起飞" en="Pick a destination" />
                     </button>
                   )}
                   <button
@@ -1218,7 +1223,7 @@ function GameTable({
                     className="secondary"
                     onClick={() => session.airportStay()}
                   >
-                    不飞
+                    <BtnLabel zh="不飞" en="Don't fly" />
                   </button>
                 </div>
               </div>
@@ -1250,15 +1255,22 @@ function GameTable({
                         disabled={!can}
                         onClick={() => session.airportFlyTo(t.index)}
                       >
-                        {t.zh}
-                        {fare ? (
-                          <>
-                            {" · "}
-                            <Money amount={fare} />
-                          </>
-                        ) : (
-                          " · 免费"
-                        )}
+                        <BtnLabel
+                          zh={
+                            fare ? (
+                              <>
+                                {t.zh} · <Money amount={fare} />
+                              </>
+                            ) : (
+                              `${t.zh} · 免费`
+                            )
+                          }
+                          en={
+                            fare
+                              ? `Fly to ${t.en}`
+                              : `Fly free to ${t.en}`
+                          }
+                        />
                       </button>
                     </li>
                   );
@@ -1269,7 +1281,7 @@ function GameTable({
                 className="secondary"
                 onClick={() => session.cancelAirportDest()}
               >
-                返回
+                <BtnLabel zh="返回" en="Cancel flight" />
               </button>
             </div>
           )}
@@ -1284,7 +1296,7 @@ function GameTable({
                     type="button"
                     onClick={() => session.useDischargeCard()}
                   >
-                    用出院卡取消
+                    <BtnLabel zh="用出院卡取消" en="Cancel with discharge card" />
                   </button>
                 )}
                 <button
@@ -1292,7 +1304,7 @@ function GameTable({
                   className="secondary"
                   onClick={() => session.acceptHospital()}
                 >
-                  入院
+                  <BtnLabel zh="入院" en="Enter hospital" />
                 </button>
               </div>
             </div>
@@ -1306,14 +1318,14 @@ function GameTable({
               </p>
               <div className="actions">
                 <button type="button" onClick={() => session.useRentFree()}>
-                  使用免租
+                  <BtnLabel zh="使用免租" en="Use rent-free token" />
                 </button>
                 <button
                   type="button"
                   className="secondary"
                   onClick={() => session.declineRentFree()}
                 >
-                  照常付租
+                  <BtnLabel zh="照常付租" en="Pay rent as usual" />
                 </button>
               </div>
             </div>
@@ -1339,7 +1351,7 @@ function GameTable({
                       type="button"
                       onClick={() => session.freeSailTo(t.index)}
                     >
-                      前往 {t.zh}
+                      <BtnLabel zh={`前往 ${t.zh}`} en={`Sail to ${t.en}`} />
                     </button>
                   ))}
                 <button
@@ -1347,7 +1359,7 @@ function GameTable({
                   className="secondary"
                   onClick={() => session.portStay()}
                 >
-                  不出航
+                  <BtnLabel zh="不出航" en="Don't sail" />
                 </button>
               </div>
             </div>
@@ -1363,7 +1375,7 @@ function GameTable({
                     type="button"
                     onClick={() => session.cancelForceAuction()}
                   >
-                    用赌场VIP卡取消
+                    <BtnLabel zh="用赌场VIP卡取消" en="Cancel with VIP card" />
                   </button>
                 )}
                 <button
@@ -1371,7 +1383,7 @@ function GameTable({
                   className="secondary"
                   onClick={() => session.proceedForceAuction()}
                 >
-                  选择地产拍卖
+                  <BtnLabel zh="选择地产拍卖" en="Choose land to auction" />
                 </button>
               </div>
             </div>
@@ -1388,8 +1400,15 @@ function GameTable({
                       className="dest-btn"
                       onClick={() => session.pickForceAuctionTile(t.index)}
                     >
-                      {t.zh} · 地价 <Money amount={t.price ?? 0} /> · 起拍{" "}
-                      <Money amount={(t.price ?? 0) * 2} />
+                      <BtnLabel
+                        zh={
+                          <>
+                            {t.zh} · 地价 <Money amount={t.price ?? 0} /> · 起拍{" "}
+                            <Money amount={(t.price ?? 0) * 2} />
+                          </>
+                        }
+                        en={t.en}
+                      />
                     </button>
                   </li>
                 ))}
@@ -1414,8 +1433,15 @@ function GameTable({
                         className="dest-btn"
                         onClick={() => session.pickDebtDemolishTile(t.index)}
                       >
-                        {t.zh} · {d.houses}屋→{d.houses - 1} · 返还{" "}
-                        <Money amount={refund} />
+                        <BtnLabel
+                          zh={
+                            <>
+                              {t.zh} · {d.houses}屋→{d.houses - 1} · 返还{" "}
+                              <Money amount={refund} />
+                            </>
+                          }
+                          en={t.en}
+                        />
                       </button>
                     </li>
                   );
@@ -1439,7 +1465,14 @@ function GameTable({
                       className="dest-btn"
                       onClick={() => session.pickDebtFacilitySell(t.index)}
                     >
-                      {t.zh} · 半价退回 <Money amount={500} />
+                      <BtnLabel
+                        zh={
+                          <>
+                            {t.zh} · 半价退回 <Money amount={500} />
+                          </>
+                        }
+                        en={t.en}
+                      />
                     </button>
                   </li>
                 ))}
@@ -1463,8 +1496,15 @@ function GameTable({
                       className="dest-btn"
                       onClick={() => session.pickDebtAuctionTile(t.index)}
                     >
-                      {t.zh} · 地价 <Money amount={t.price ?? 0} /> · 起拍{" "}
-                      <Money amount={(t.price ?? 0) * 2} />
+                      <BtnLabel
+                        zh={
+                          <>
+                            {t.zh} · 地价 <Money amount={t.price ?? 0} /> · 起拍{" "}
+                            <Money amount={(t.price ?? 0) * 2} />
+                          </>
+                        }
+                        en={t.en}
+                      />
                     </button>
                   </li>
                 ))}
@@ -1487,7 +1527,7 @@ function GameTable({
                     }
                     onClick={() => session.auctionBid()}
                   >
-                    出价 <Money amount={auctionView.minBid} />
+                    <BtnLabel zh={<>出价 <Money amount={auctionView.minBid} /></>} en="Place bid" />
                   </button>
                   <button
                     type="button"
@@ -1498,14 +1538,17 @@ function GameTable({
                     }
                     onClick={() => session.auctionBuyout()}
                   >
-                    一口价 <Money amount={auctionView.auction.buyoutPrice} />
+                    <BtnLabel
+                      zh={<>一口价 <Money amount={auctionView.auction.buyoutPrice} /></>}
+                      en="Buy now"
+                    />
                   </button>
                   <button
                     type="button"
                     className="secondary"
                     onClick={() => session.auctionPass()}
                   >
-                    弃权
+                    <BtnLabel zh="弃权" en="Pass this bid" />
                   </button>
                 </div>
               ) : (
@@ -1525,7 +1568,7 @@ function GameTable({
                   className="secondary"
                   onClick={() => session.continueTurn()}
                 >
-                  强制继续
+                  <BtnLabel zh="强制继续" en="Force continue" />
                 </button>
               </div>
             )}
@@ -1540,7 +1583,7 @@ function GameTable({
                     type="button"
                     onClick={() => session.cancelCasinoEnter()}
                   >
-                    用赌场VIP卡取消
+                    <BtnLabel zh="用赌场VIP卡取消" en="Cancel with VIP card" />
                   </button>
                 )}
                 <button
@@ -1548,7 +1591,7 @@ function GameTable({
                   className="secondary"
                   onClick={() => session.acceptCasinoEnter()}
                 >
-                  进入赌场
+                  <BtnLabel zh="进入赌场" en="Enter the casino" />
                 </button>
               </div>
             </div>
@@ -1568,7 +1611,10 @@ function GameTable({
                       className="dest-btn dest-btn-slim"
                       onClick={() => session.pickGunBuild(t.index)}
                     >
-                      {t.zh} · 现 {state.deeds[t.index]?.houses ?? 0} 屋
+                      <BtnLabel
+                        zh={`${t.zh} · 现 ${state.deeds[t.index]?.houses ?? 0} 屋`}
+                        en={`Free +1 house · ${t.en}`}
+                      />
                     </button>
                   </li>
                 ))}
@@ -1578,7 +1624,7 @@ function GameTable({
                     className="secondary dest-btn-slim"
                     onClick={() => session.skipGunEffect()}
                   >
-                    跳过
+                    <BtnLabel zh="跳过" en="Skip free build" />
                   </button>
                 </li>
               </ul>
@@ -1599,10 +1645,18 @@ function GameTable({
                         className="dest-btn dest-btn-slim"
                         onClick={() => session.pickGunDemolish(t.index)}
                       >
-                        {t.zh}
-                        {d.special
-                          ? ` · 特殊→3屋`
-                          : ` · ${d.houses}屋→${d.houses - 1}`}
+                        <BtnLabel
+                          zh={
+                            d.special
+                              ? `${t.zh} · 特殊→3屋`
+                              : `${t.zh} · ${d.houses}屋→${d.houses - 1}`
+                          }
+                          en={
+                            d.special
+                              ? `Downgrade special · ${t.en}`
+                              : `Demolish 1 house · ${t.en}`
+                          }
+                        />
                       </button>
                     </li>
                   );
@@ -1614,7 +1668,7 @@ function GameTable({
                       className="secondary dest-btn-slim"
                       onClick={() => session.skipGunEffect()}
                     >
-                      跳过
+                      <BtnLabel zh="跳过" en="Skip demolish" />
                     </button>
                   </li>
                 ) : null}
@@ -1634,7 +1688,7 @@ function GameTable({
                     className="dest-btn"
                     onClick={() => session.chooseRacetrackExit(t.index)}
                   >
-                    {t.zh}
+                    <BtnLabel zh={t.zh} en={`Exit via ${t.en}`} />
                   </button>
                 ))}
               </div>
@@ -1660,7 +1714,10 @@ function GameTable({
                         className="dest-btn dest-btn-slim"
                         onClick={() => session.swapWith(p.id)}
                       >
-                        {p.name} @ {state.tiles[p.position]?.zh}
+                        <BtnLabel
+                          zh={`${p.name} @ ${state.tiles[p.position]?.zh ?? "—"}`}
+                          en="Swap"
+                        />
                       </button>
                     </li>
                   ))}
@@ -1670,7 +1727,7 @@ function GameTable({
                     className="secondary dest-btn-slim"
                     onClick={() => session.skipSwap()}
                   >
-                    不换
+                    <BtnLabel zh="不换" en="Don't swap" />
                   </button>
                 </li>
               </ul>
@@ -1682,7 +1739,10 @@ function GameTable({
           <div className="actions main-actions">
             {hospitalSkipTurn ? (
               <button type="button" onClick={() => session.skipHospitalTurn()}>
-                跳过本回合（住院剩余 {current.hospitalSkips}）
+                <BtnLabel
+                  zh={`跳过本回合（住院剩余 ${current.hospitalSkips}）`}
+                  en="Skip hospital turn"
+                />
               </button>
             ) : (
               <>
@@ -1691,14 +1751,14 @@ function GameTable({
                   disabled={!canRoll}
                   onClick={() => session.roll()}
                 >
-                  {rollButtonLabel}
+                  <BtnLabel zh={rollButtonLabel.zh} en={rollButtonLabel.en} />
                 </button>
                 <button
                   type="button"
                   disabled={!canContinue}
                   onClick={() => session.continueTurn()}
                 >
-                  继续 Continue
+                  <BtnLabel zh="继续" en="Continue" />
                 </button>
               </>
             )}

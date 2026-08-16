@@ -165,7 +165,7 @@ export const PLAZA_HUD_PERCENT = (() => {
 /** Top wood-frame strip for brand + status overlay (% of full board image). */
 export const BOARD_TOP_STRIP = {
   left: (40 / PLAY) * 100,
-  top: 0.35,
+  top: 0.15,
   width: ((PLAY - 80) / PLAY) * 100,
-  height: (40 / BOARD_IMG_H) * 100,
+  height: (46 / BOARD_IMG_H) * 100,
 };
