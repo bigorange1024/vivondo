@@ -1,10 +1,14 @@
 # Dependencies / build
 node_modules/
 dist/
-release/
 build/
 .vite/
 *.local
+
+# Release: track unpacked player build, not the upload zip / staging
+release/**/*.zip
+release/**/*-staging/
+release/vivondo-itch-staging/
 
 # Python
 __pycache__/

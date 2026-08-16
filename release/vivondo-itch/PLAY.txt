@@ -1,0 +1,43 @@
+花花世界 / Vivondo — 玩家包说明
+================================
+
+【方式 A】itch.io 网页游玩（推荐，不用装 Node）
+  作者把本 ZIP 上传到 itch，并勾选「在浏览器中游玩」。
+  你只要在商店页点 Run game / 运行游戏即可。
+  这时不需要下载 ZIP，也不需要 game.bat / Node.js。
+
+【方式 B】下载 ZIP 后在本机玩（Windows）
+  1. 解压整个文件夹
+  2. 安装 Node.js：https://nodejs.org/
+  3. 双击 play.bat
+  不要直接双击 index.html（打不开或会报错）。
+
+【方式 B · 命令行】
+  cd 到本文件夹后执行：
+  npx --yes serve -p 4173 .
+  浏览器打开 http://127.0.0.1:4173/
+
+【重要 · 存档】
+  存档只在「当前设备 + 当前浏览器」本地（localStorage），共 9 槽，需手动保存。
+  不是云存档，不能跨设备/跨浏览器同步。
+  换浏览器、换设备、清站点数据、关无痕窗口 → 存档可能全部丢失。
+  重要进度请自行截图或记录。
+
+许可：EULA.md · 字体 licenses/fonts/
+
+注意：这不是开发仓库，没有 game.bat 开发脚本。
+局域网多人联机同桌尚未支持；多设备打开是各自一局。
+
+Copyright (c) 2026 bigorange1024. All Rights Reserved.
+
+--- English ---
+
+A) itch.io “Run game” in browser — no Node, no ZIP needed for players.
+B) Downloaded ZIP on Windows: unzip → install Node.js → double-click play.bat.
+   Do not open index.html directly.
+
+IMPORTANT · SAVES
+  Saves stay only on THIS device + THIS browser (localStorage).
+  9 slots, manual save only — NOT cloud, NOT synced across devices/browsers.
+  Clearing site data / other browser / other device / closing incognito can wipe saves.
+  Screenshot or note progress if it matters.
