@@ -1,6 +1,7 @@
 # Dependencies / build
 node_modules/
 dist/
+release/
 build/
 .vite/
 *.local

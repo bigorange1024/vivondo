@@ -1,7 +1,24 @@
+/* Bundled SIL OFL fonts only — no system UI font names (Segoe/Georgia/etc.). */
+@font-face {
+  font-family: "Noto Sans SC";
+  src: url("../assets/fonts/NotoSansSC-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Noto Sans SC";
+  src: url("../assets/fonts/NotoSansSC-Bold.otf") format("opentype");
+  font-weight: 600 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color: #1e2a36;
   background: #cfc3ae;
-  font-family: "Noto Sans SC", "Segoe UI", system-ui, sans-serif;
+  font-family: "Noto Sans SC", sans-serif;
   line-height: 1.35;
   --board-scale: 1;
 }
@@ -1099,7 +1116,7 @@ button:disabled:hover {
 .money-g {
   position: relative;
   display: inline-block;
-  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
+  font-family: "Noto Sans SC", sans-serif;
   font-weight: 800;
   font-style: normal;
   font-size: 1.05em;
@@ -1281,9 +1298,50 @@ button:disabled:hover {
   font-size: 0.95rem;
 }
 
+.modal-message {
+  white-space: pre-line;
+}
+
 .modal-hint {
   font-size: 0.85rem !important;
   color: #667788 !important;
+}
+
+.save-title-en {
+  font-weight: 600;
+  font-size: 0.9em;
+  color: #5c6b7a;
+}
+
+.save-warning {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #b8860b;
+  background: #fff6e0;
+  border-radius: 4px;
+}
+
+.save-warning p {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #3a2a18;
+}
+
+.save-warning p:last-child {
+  margin-bottom: 0;
+}
+
+.setup-save-notice {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #b8860b;
+  background: #fff6e0;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #3a2a18;
+  white-space: pre-line;
 }
 
 .modal-error {
@@ -1412,6 +1470,39 @@ button.danger {
 .rules-fab .btn-en {
   font-size: clamp(8px, 0.95cqi, 11px);
   opacity: 0.72;
+}
+
+.eula-modal {
+  width: min(640px, 100%);
+  max-height: min(86vh, 640px);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 14px 12px;
+  gap: 10px;
+}
+
+.eula-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 4px 8px;
+}
+
+.eula-section {
+  margin-bottom: 14px;
+}
+
+.eula-section h3 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+  color: #2c2114;
+}
+
+.eula-section p {
+  margin: 0 0 6px;
+  font-size: 0.9rem;
+  color: #4a3a28;
+  line-height: 1.45;
+  text-indent: 0;
 }
 
 .setup-rules {

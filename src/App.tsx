@@ -32,6 +32,7 @@ import { createSoloSession, type GameSession } from "./session/solo";
 import { BtnLabel } from "./ui/BtnLabel";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { RulesManual, RulesOpenButton } from "./ui/RulesManual";
+import { EulaModal } from "./ui/EulaModal";
 import {
   IconCoin,
   IconDiceFace,
@@ -125,6 +126,7 @@ export default function App() {
   } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
+  const [eulaOpen, setEulaOpen] = useState(false);
 
   useEffect(() => {
     if (!session) {
@@ -202,7 +204,7 @@ export default function App() {
   const applyLoad = async (slot: number) => {
     const file = await readSaveSlot(slot);
     if (!file) {
-      setToast(`存档 #${slot} 不存在`);
+      setToast(`存档 #${slot} 不存在 · Save #${slot} missing`);
       return;
     }
     pendingImport.current = file.state;
@@ -213,7 +215,7 @@ export default function App() {
     });
     setSessionEpoch((n) => n + 1);
     setScreen("play");
-    setToast(`已读取存档 #${slot}`);
+    setToast(`已读取存档 #${slot} · Loaded slot #${slot}`);
   };
 
   const applySave = async (slot: number) => {
@@ -222,14 +224,14 @@ export default function App() {
     const where = await writeSaveSlot(slot, file);
     setToast(
       where === "disk"
-        ? `已保存到 save/slot-${slot}.json`
-        : `已保存到浏览器本地存档 #${slot}`,
+        ? `已保存到本机 save/slot-${slot}.json · Saved to disk slot #${slot}`
+        : `已保存到本浏览器本地 #${slot}（非云存档） · Saved in this browser only #${slot}`,
     );
   };
 
   const applyDelete = async (slot: number) => {
     await deleteSaveSlot(slot);
-    setToast(`已删除存档 #${slot}`);
+    setToast(`已删除存档 #${slot} · Deleted slot #${slot}`);
   };
 
   const onSlotPicked = (slot: number, exists: boolean) => {
@@ -241,8 +243,8 @@ export default function App() {
       setConfirm({
         title: exists ? `覆盖存档 #${slot}？` : `保存到 #${slot}？`,
         message: exists
-          ? "将覆盖该槽位已有进度，此操作不可撤销。"
-          : `写入 save/slot-${slot}.json（开发服务可用时）。`,
+          ? "将覆盖该槽位已有进度，不可撤销。\n网页版存档仅在本浏览器；清数据/换设备会丢失。\n\nThis overwrites the slot permanently. Web saves stay in this browser only and can be lost if you clear site data or switch devices."
+          : "将写入当前存档位。网页版（itch 等）只存在本浏览器，不是云存档，无法跨设备同步。\n\nSaves go to the current slot. On itch/web builds they stay in this browser only — not cloud, not synced across devices.",
         confirmLabel: "保存",
         confirmEn: "Save",
         onConfirm: () => {
@@ -256,9 +258,10 @@ export default function App() {
     if (mode === "load") {
       setConfirm({
         title: `读取存档 #${slot}？`,
-        message: screen === "play"
-          ? "将丢弃当前未保存进度，并恢复该存档盘面。"
-          : "将加载该存档并进入游戏。",
+        message:
+          screen === "play"
+            ? "将丢弃当前未保存进度，并恢复该存档盘面。\n\nUnsaved progress will be discarded and this slot loaded."
+            : "将加载该存档并进入游戏。\n\nLoad this slot and enter the game.",
         confirmLabel: "读取",
         confirmEn: "Load",
         onConfirm: () => {
@@ -271,7 +274,8 @@ export default function App() {
 
     setConfirm({
       title: `删除存档 #${slot}？`,
-      message: "将删除本地存档文件，此操作不可撤销。",
+      message:
+        "将永久删除该槽位存档，不可撤销。\n\nPermanently delete this slot. This cannot be undone.",
       danger: true,
       confirmLabel: "删除",
       confirmEn: "Delete",
@@ -301,6 +305,7 @@ export default function App() {
         onConfirm={() => confirm?.onConfirm()}
       />
       <RulesManual open={rulesOpen} onClose={() => setRulesOpen(false)} />
+      <EulaModal open={eulaOpen} onClose={() => setEulaOpen(false)} />
       {toast ? <div className="app-toast">{toast}</div> : null}
     </>
   );
@@ -313,6 +318,7 @@ export default function App() {
           onOpenLoad={() => setSaveMode("load")}
           onOpenDelete={() => setSaveMode("delete")}
           onOpenRules={() => setRulesOpen(true)}
+          onOpenEula={() => setEulaOpen(true)}
         />
         {shell}
       </div>

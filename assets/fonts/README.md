@@ -1,18 +1,19 @@
-# Fonts (free for commercial use)
+# Fonts (SIL OFL — free for commercial use / embedding)
 
-Chinese board UI uses **Noto Sans SC** (not Microsoft YaHei).
+All in-game text (board PNG + web UI) uses **only** these bundled open fonts.  
+Do **not** rely on Microsoft YaHei, Segoe UI, Georgia, Times New Roman, etc.
 
-| File | Family | License | Notes |
-|------|--------|---------|--------|
-| `NotoSansSC-Bold.otf` | [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC) | **SIL OFL 1.1** | Primary Chinese |
-| `NotoSansSC-Regular.otf` | same | **SIL OFL 1.1** | HUD / small text |
-| `Cinzel-Bold.ttf` | [Cinzel](https://fonts.google.com/specimen/Cinzel) | **SIL OFL 1.1** | Latin title **Vivondo** |
-| `PlayfairDisplay-Bold.ttf` | [Playfair Display](https://fonts.google.com/specimen/Playfair+Display) | **SIL OFL 1.1** | Latin fallback |
+| File | Family | License | Use |
+|------|--------|---------|-----|
+| `NotoSansSC-Bold.otf` | [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC) | **SIL OFL 1.1** | Chinese + Latin UI / board |
+| `NotoSansSC-Regular.otf` | same | **SIL OFL 1.1** | UI body text |
+| `Cinzel-Bold.ttf` | [Cinzel](https://fonts.google.com/specimen/Cinzel) | **SIL OFL 1.1** | Board Latin title **Vivondo** |
+| `PlayfairDisplay-Bold.ttf` | [Playfair Display](https://fonts.google.com/specimen/Playfair+Display) | **SIL OFL 1.1** | Board Latin fallback |
 
-License texts: `OFL-NotoSansSC.txt`, `OFL-Cinzel.txt`, `OFL-Playfair.txt`.
+License texts (keep with the fonts): `OFL-NotoSansSC.txt`, `OFL-Cinzel.txt`, `OFL-Playfair.txt`.
 
-### Why not MIT?
+### Notes
 
-Open fonts are almost always **SIL OFL**, not MIT. OFL allows free commercial use, modification, and embedding in games/apps (you must keep the license notice; you generally cannot sell the font files alone as a standalone product). That is the usual choice for open-source CJK typefaces.
-
-There is no widely used, complete Simplified Chinese UI font under plain MIT that matches Noto’s coverage.
+- **SIL OFL** (not MIT) is the usual license for open CJK fonts. It allows free commercial use and embedding in games/apps; keep the license notices; do not sell the font files alone as a product.
+- Web UI loads Noto Sans SC via `@font-face` in `src/styles.css`.
+- Board art is baked by `assets/render_board_v7.py` using the same folder.

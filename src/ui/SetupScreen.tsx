@@ -26,11 +26,13 @@ export function SetupScreen({
   onOpenLoad,
   onOpenDelete,
   onOpenRules,
+  onOpenEula,
 }: {
   onStart: (cfg: SetupConfig) => void;
   onOpenLoad: () => void;
   onOpenDelete: () => void;
   onOpenRules?: () => void;
+  onOpenEula?: () => void;
 }) {
   const [humans, setHumans] = useState(1);
   const [ais, setAis] = useState(1);
@@ -135,6 +137,11 @@ export function SetupScreen({
             </span>
           </button>
         </div>
+        <p className="setup-save-notice" role="note">
+          {
+            "重要 · 网页版存档只在本设备本浏览器（非云、不跨设备；清数据可能丢失）。\nImportant · Web saves stay in this browser only — not cloud, not synced; clearing site data may wipe them."
+          }
+        </p>
         {onOpenRules ? (
           <button
             type="button"
@@ -144,6 +151,18 @@ export function SetupScreen({
             <span className="btn-label">
               <span className="btn-zh">游戏规则</span>
               <span className="btn-en">Rules</span>
+            </span>
+          </button>
+        ) : null}
+        {onOpenEula ? (
+          <button
+            type="button"
+            className="secondary setup-rules"
+            onClick={onOpenEula}
+          >
+            <span className="btn-label">
+              <span className="btn-zh">许可协议</span>
+              <span className="btn-en">EULA</span>
             </span>
           </button>
         ) : null}

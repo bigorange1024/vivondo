@@ -192,3 +192,38 @@ export function formatSaveMeta(meta: SaveMeta | null): string {
     : t.toLocaleString("zh-CN", { hour12: false });
   return `${meta.summary} · ${stamp}`;
 }
+
+export type SaveBackend = "disk" | "browser";
+
+/** Disk API available (dev server) vs browser-only (itch / static). */
+export async function detectSaveBackend(): Promise<SaveBackend> {
+  const api = await listFromApi();
+  return api ? "disk" : "browser";
+}
+
+/** Bilingual save warnings — show in UI, store pages, and PLAY.txt. */
+export const SAVE_NOTICE = {
+  browser: {
+    zh:
+      "网页版存档只保存在「当前这台设备 + 当前这个浏览器」里（共 9 个槽位，需手动保存，无自动存档）。" +
+      "换浏览器、换设备、清站点数据、无痕窗口关闭后，存档可能全部丢失，且无法同步到其他设备。" +
+      "请勿依赖云同步；重要进度请自行截图或记录。",
+    en:
+      "Web saves stay only on THIS device + THIS browser (9 slots, manual save only — no autosave). " +
+      "Changing browsers/devices, clearing site data, or closing an incognito window can wipe saves. " +
+      "Saves do NOT sync across devices. Do not rely on cloud sync; screenshot or note progress if it matters.",
+  },
+  disk: {
+    zh:
+      "当前为开发/本地服务模式：存档优先写入本机项目文件夹 save/slot-N.json（共 9 槽，需手动保存）。" +
+      "若服务不可用会退回浏览器本地存储。换电脑不会自动带上存档。",
+    en:
+      "Dev/local server mode: saves prefer the project folder save/slot-N.json (9 slots, manual save). " +
+      "If the server is unavailable, the game falls back to browser storage. Saves do not move with you to another PC automatically.",
+  },
+} as const;
+
+export function saveNoticeBlock(backend: SaveBackend): string {
+  const n = SAVE_NOTICE[backend];
+  return `${n.zh}\n\n${n.en}`;
+}

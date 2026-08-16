@@ -5,6 +5,8 @@ import { saveApiPlugin } from "./scripts/vite-save-api";
 import { openLanBrowserPlugin } from "./scripts/vite-open-lan";
 
 export default defineConfig({
+  // Relative paths so the itch.io / ZIP build works without a fixed domain.
+  base: "./",
   plugins: [
     react(),
     saveApiPlugin(path.resolve(__dirname)),
@@ -18,7 +20,7 @@ export default defineConfig({
   },
   server: {
     host: true,
-    open: false, // LAN IP opened by openLanBrowserPlugin instead of localhost
+    open: false,
     port: 5173,
     strictPort: false,
     fs: {
@@ -29,5 +31,10 @@ export default defineConfig({
     host: true,
     open: false,
     port: 4173,
+  },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    assetsInlineLimit: 0,
   },
 });

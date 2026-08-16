@@ -526,6 +526,9 @@ MVP：
 **洗牌**：每当有人完成一次抽卡（抽出该张之后），对 **剩余抽牌堆** 立刻重新洗牌。可持有卡因重复持有而立刻回归牌池时，回归后也须对抽牌堆再洗一次。弃置堆仅在抽牌堆抽尽时整堆洗回成为新的抽牌堆（洗回后即为当前抽牌堆）。  
 **读档**：恢复盘面时保留抽牌堆/弃牌堆的**卡牌集合**，但对抽牌堆**重新洗牌**（不保证读档后下一张与存档时相同）；掷骰本身每次独立随机，读档不固化后续点数。
 
+**存档存储（玩家须知 · 中英）**：网页/itch 版仅存于当前设备当前浏览器（localStorage），非云、不跨设备；清站点数据可能丢失。开发模式优先写 `save/slot-N.json`。  
+**Save storage (player notice)**: Web/itch builds store saves only in this device + this browser (localStorage) — not cloud, not synced. Clearing site data may wipe them. Dev mode prefers `save/slot-N.json`.
+
 #### 牌池构成（24 张）
 
 | 类型 | 张数 |

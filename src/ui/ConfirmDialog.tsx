@@ -49,7 +49,7 @@ export function ConfirmDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <h2 id={titleId}>{title}</h2>
-        <p>{message}</p>
+        <p className="modal-message">{message}</p>
         <div className="modal-actions">
           <button type="button" className="secondary" onClick={onCancel}>
             <BtnLabel zh={cancelLabel} en={cancelEn} />
