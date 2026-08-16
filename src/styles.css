@@ -284,10 +284,10 @@ body {
 
 .token {
   position: absolute;
-  width: calc(var(--board-scale) * 16px);
-  height: calc(var(--board-scale) * 16px);
+  width: calc(var(--board-scale) * 20px);
+  height: calc(var(--board-scale) * 20px);
   border-radius: 50% 50% 50% 10%;
-  transform: translate(-50%, -50%) rotate(-45deg) scale(0.72);
+  transform: translate(-50%, -50%) rotate(-45deg) scale(1.05);
   border: calc(var(--board-scale) * 2px) solid #fff;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
   transition:
@@ -300,7 +300,7 @@ body {
 }
 
 .token.active {
-  transform: translate(-50%, -50%) rotate(-45deg) scale(1.38);
+  transform: translate(-50%, -50%) rotate(-45deg) scale(1.52);
   border-width: calc(var(--board-scale) * 2.5px);
   box-shadow:
     0 0 0 2px rgba(255, 255, 255, 0.95),

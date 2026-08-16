@@ -724,7 +724,7 @@ function GameTable({
                     p.racetrackPos != null
                       ? racetrackSeatPercent(p.racetrackPos)
                       : tileCenterPercent(state.tiles[p.position]!);
-                  const stepPct = p.racetrackPos != null ? 1.05 : 1.55;
+                  const stepPct = p.racetrackPos != null ? 1.2 : 1.85;
                   const [sx, sy] = STACK[stackIdx] ?? [0, 0];
                   const ox = group.length === 1 ? 0 : sx * stepPct;
                   const oy = group.length === 1 ? 0 : sy * stepPct;
