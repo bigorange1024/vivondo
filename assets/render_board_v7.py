@@ -708,25 +708,13 @@ def main():
         (CA, "中美", "C.America"),
         (NA, "北美", "N.America"),
         (OCEANIA, "大洋洲", "Oceania"),
-        (EVENT_FG, "事件", "Event"),
     ]
     ly = size + 14
     lx = 28
     sw = 26
     for i, (col, zh, en) in enumerate(legend):
         x = lx + i * 172
-        if zh == "事件":
-            draw.rectangle([x, ly + 6, x + sw, ly + 6 + sw], fill=WHITE, outline=LINE, width=2)
-            qf = font(20, prefer=[str(FONTS_DIR / "NotoSansSC-Bold.otf")])
-            qb = draw.textbbox((0, 0), "?", font=qf)
-            draw.text(
-                (x + (sw - (qb[2] - qb[0])) / 2, ly + 6 + (sw - (qb[3] - qb[1])) / 2 - qb[1]),
-                "?",
-                font=qf,
-                fill=EVENT_FG,
-            )
-        else:
-            draw.rectangle([x, ly + 6, x + sw, ly + 6 + sw], fill=col, outline=LINE, width=2)
+        draw.rectangle([x, ly + 6, x + sw, ly + 6 + sw], fill=col, outline=LINE, width=2)
         draw.text((x + sw + 10, ly + 2), zh, font=fonts["legend"], fill=INK)
         draw.text((x + sw + 10, ly + 28), en, font=fonts["legend_en"], fill=(90, 90, 90))
 

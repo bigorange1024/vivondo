@@ -4,12 +4,12 @@ export const TRACK_LEN = 21;
 
 export type TrackCellKind = "start" | "money" | "foot" | "gun";
 
-/** Cells 1..20: (money → foot → money → gun) × 5 */
+/** Cells 1..20: (money → racing/horse → money → slots) × 5 */
 export function trackCellKind(index: number): TrackCellKind {
   if (index <= 0 || index >= TRACK_LEN) return "start";
   const slot = (index - 1) % 4;
   if (slot === 0 || slot === 2) return "money";
-  if (slot === 1) return "foot";
+  if (slot === 1) return "foot"; // racing (horse-head); id kept for save compat
   return "gun";
 }
 

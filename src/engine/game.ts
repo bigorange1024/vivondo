@@ -1475,7 +1475,7 @@ function resolveTrackCell(
   if (depth > 12) {
     return pushLog(
       { ...state, prompt: { kind: "idle" } },
-      "脚印连锁过深，停止结算",
+      "赛马连锁过深，停止结算",
     );
   }
 
@@ -1536,7 +1536,7 @@ function applyTrackJudge(
 
   if (kind === "foot") {
     if (d === 0) {
-      return pushLog({ ...s, prompt: { kind: "idle" } }, "脚印：不移动");
+      return pushLog({ ...s, prompt: { kind: "idle" } }, "赛马：不移动");
     }
     const from = player.racetrackPos ?? pos;
     const moved = moveOnTrack(from, d);
@@ -1545,7 +1545,7 @@ function applyTrackJudge(
     });
     s = pushLog(
       s,
-      `${player.name} 脚印移动 ${d > 0 ? "+" : ""}${d}${moved.exited ? " · 离场" : ` → ${moved.pos} 格`}`,
+      `${player.name} 赛马移动 ${d > 0 ? "+" : ""}${d}${moved.exited ? " · 离场" : ` → ${moved.pos} 格`}`,
     );
     if (moved.exited) {
       return { ...s, prompt: { kind: "racetrackExit" } };

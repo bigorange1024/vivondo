@@ -212,6 +212,26 @@ export function legendContinentSwatchPercent(legendIndex: number): {
   };
 }
 
+/** Bottom-right rules button slot (% of full board PNG). */
+export function legendRulesButtonPercent(): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+} {
+  const { width, height, playSize } = BOARD_PNG;
+  const btnW = 108;
+  const btnH = 52;
+  const rightPad = 18;
+  const topPad = 16;
+  return {
+    left: ((width - rightPad - btnW) / width) * 100,
+    top: ((playSize + topPad) / height) * 100,
+    width: (btnW / width) * 100,
+    height: (btnH / height) * 100,
+  };
+}
+
 /** Full tile face box (% of play area), matching render_board_v7 gap. */
 export function tileRectPercent(tile: BoardTile): {
   left: number;

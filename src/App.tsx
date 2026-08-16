@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, type ReactNode } from "react";
 import boardUrl from "@assets/board-map-v7.png";
-import { BOARD_PNG, LEGEND_CONTINENTS, legendContinentSwatchPercent, tileCenterPercent, tileContinentBarPercent, tileRectPercent } from "./engine/board";
+import { BOARD_PNG, LEGEND_CONTINENTS, legendContinentSwatchPercent, legendRulesButtonPercent, tileCenterPercent, tileContinentBarPercent, tileRectPercent } from "./engine/board";
 import { CARD_ZH } from "./engine/deck";
 import { continentControllerId } from "./engine/deeds";
 import {
@@ -31,6 +31,7 @@ import {
 import { createSoloSession, type GameSession } from "./session/solo";
 import { BtnLabel } from "./ui/BtnLabel";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
+import { RulesManual, RulesOpenButton } from "./ui/RulesManual";
 import {
   IconCoin,
   IconDiceFace,
@@ -123,6 +124,7 @@ export default function App() {
     onConfirm: () => void;
   } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [rulesOpen, setRulesOpen] = useState(false);
 
   useEffect(() => {
     if (!session) {
@@ -298,6 +300,7 @@ export default function App() {
         onCancel={() => setConfirm(null)}
         onConfirm={() => confirm?.onConfirm()}
       />
+      <RulesManual open={rulesOpen} onClose={() => setRulesOpen(false)} />
       {toast ? <div className="app-toast">{toast}</div> : null}
     </>
   );
@@ -309,6 +312,7 @@ export default function App() {
           onStart={startGame}
           onOpenLoad={() => setSaveMode("load")}
           onOpenDelete={() => setSaveMode("delete")}
+          onOpenRules={() => setRulesOpen(true)}
         />
         {shell}
       </div>
@@ -326,6 +330,7 @@ export default function App() {
       onSave={() => setSaveMode("save")}
       onLoad={() => setSaveMode("load")}
       onDelete={() => setSaveMode("delete")}
+      onOpenRules={() => setRulesOpen(true)}
       shell={shell}
     />
   );
@@ -341,6 +346,7 @@ function GameTable({
   onSave,
   onLoad,
   onDelete,
+  onOpenRules,
   shell,
 }: {
   session: GameSession;
@@ -352,6 +358,7 @@ function GameTable({
   onSave: () => void;
   onLoad: () => void;
   onDelete: () => void;
+  onOpenRules: () => void;
   shell: ReactNode;
 }) {
   const current = state.players[state.currentPlayerIndex]!;
@@ -760,6 +767,21 @@ function GameTable({
                 );
               })}
             </div>
+            {(() => {
+              const slot = legendRulesButtonPercent();
+              return (
+                <RulesOpenButton
+                  className="rules-fab"
+                  onClick={onOpenRules}
+                  style={{
+                    left: `${slot.left}%`,
+                    top: `${slot.top}%`,
+                    width: `${slot.width}%`,
+                    height: `${slot.height}%`,
+                  }}
+                />
+              );
+            })()}
 
             <div
               className="plaza-hud"

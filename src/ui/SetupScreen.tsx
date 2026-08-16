@@ -25,10 +25,12 @@ export function SetupScreen({
   onStart,
   onOpenLoad,
   onOpenDelete,
+  onOpenRules,
 }: {
   onStart: (cfg: SetupConfig) => void;
   onOpenLoad: () => void;
   onOpenDelete: () => void;
+  onOpenRules?: () => void;
 }) {
   const [humans, setHumans] = useState(1);
   const [ais, setAis] = useState(1);
@@ -133,6 +135,18 @@ export function SetupScreen({
             </span>
           </button>
         </div>
+        {onOpenRules ? (
+          <button
+            type="button"
+            className="secondary setup-rules"
+            onClick={onOpenRules}
+          >
+            <span className="btn-label">
+              <span className="btn-zh">游戏规则</span>
+              <span className="btn-en">Rules</span>
+            </span>
+          </button>
+        ) : null}
       </div>
     </div>
   );
