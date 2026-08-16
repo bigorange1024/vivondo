@@ -1,7 +1,7 @@
 ﻿import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, type ReactNode } from "react";
 import boardUrl from "@assets/board-map-v7.png";
 import { BOARD_PNG, LEGEND_CONTINENTS, legendContinentSwatchPercent, legendRulesButtonPercent, tileCenterPercent, tileContinentBarPercent, tileRectPercent } from "./engine/board";
-import { CARD_ZH } from "./engine/deck";
+import { cardLabel } from "./engine/deck";
 import { continentControllerId } from "./engine/deeds";
 import {
   getAuctionView,
@@ -556,7 +556,7 @@ function GameTable({
                   <span>住院 {current.hospitalSkips}</span>
                 ) : null}
                 {state.lastEvent ? (
-                  <span>上张 {CARD_ZH[state.lastEvent]}</span>
+                  <span>上张 {cardLabel(state.lastEvent)}</span>
                 ) : null}
                 <span>{phaseLabel}</span>
                 <span>奖池 {state.casinoPool}</span>
@@ -569,11 +569,20 @@ function GameTable({
                       (() => {
                         const counts = new Map<string, number>();
                         for (const id of state.eventDeck.drawPile) {
-                          const name = CARD_ZH[id];
+                          const name = cardLabel(id);
                           counts.set(name, (counts.get(name) ?? 0) + 1);
                         }
+                        const tipRank = (name: string) => {
+                          if (name.startsWith("赌场VIP卡")) return 0;
+                          if (name.startsWith("出院卡")) return 1;
+                          return 2;
+                        };
                         return [...counts.entries()]
-                          .sort((a, b) => a[0].localeCompare(b[0], "zh"))
+                          .sort((a, b) => {
+                            const d = tipRank(a[0]) - tipRank(b[0]);
+                            if (d !== 0) return d;
+                            return a[0].localeCompare(b[0], "zh");
+                          })
                           .map(([name, n]) => (
                             <span key={name}>
                               {n > 1 ? `${name} ×${n}` : name}

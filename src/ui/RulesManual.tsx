@@ -94,6 +94,28 @@ export function RulesManual({
                 {s.body[lang].map((line, i) => (
                   <p key={i}>{line}</p>
                 ))}
+                {s.table ? (
+                  <div className="rules-table-wrap">
+                    <table className="rules-table">
+                      <thead>
+                        <tr>
+                          {s.table.headers[lang].map((h) => (
+                            <th key={h}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {s.table.rows.map((row, ri) => (
+                          <tr key={ri}>
+                            {row[lang].map((cell, ci) => (
+                              <td key={ci}>{cell}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
               </section>
             ))}
           </div>

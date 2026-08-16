@@ -41,7 +41,7 @@ export const CARD_ZH: Record<EventCardId, string> = {
   H2: "出院卡",
   H3: "赌场VIP卡",
   H4: "赌场VIP卡",
-  E01: "前进到银行（起点）",
+  E01: "去银行",
   E02: "进医院",
   E03: "银行错误",
   E04: "选美获奖",
@@ -62,6 +62,38 @@ export const CARD_ZH: Record<EventCardId, string> = {
   E19: "位置互换",
   E20: "一次免租",
 };
+
+/** English titles for UI / rules (Chinese remains primary). */
+export const CARD_EN: Record<EventCardId, string> = {
+  H1: "Discharge",
+  H2: "Discharge",
+  H3: "Casino VIP",
+  H4: "Casino VIP",
+  E01: "Go to Bank",
+  E02: "Go to Hospital",
+  E03: "Bank Error",
+  E04: "Beauty Contest",
+  E05: "Stock Dividend",
+  E06: "Income Tax",
+  E07: "Medical Fee",
+  E08: "Road Repairs",
+  E09: "Birthday",
+  E10: "Chairman",
+  E11: "Move Back",
+  E12: "Advance Again",
+  E13: "Airport VIP",
+  E14: "Port VIP",
+  E15: "Oil Price Swing",
+  E16: "Mine Relief",
+  E17: "Stock Invite",
+  E18: "Forced Auction",
+  E19: "Swap Places",
+  E20: "One Free Rent",
+};
+
+export function cardLabel(id: EventCardId): string {
+  return `${CARD_ZH[id]}（${CARD_EN[id]}）`;
+}
 
 export function holdKindOf(id: EventCardId): HoldKind | null {
   if (id === "H1" || id === "H2") return "discharge";

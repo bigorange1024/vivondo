@@ -153,10 +153,8 @@ body {
   right: 0;
   top: calc(100% + 6px);
   z-index: 40;
-  min-width: calc(var(--board-scale) * 140px);
-  max-width: min(280px, 70vw);
-  max-height: min(50vh, 320px);
-  overflow: auto;
+  min-width: calc(var(--board-scale) * 280px);
+  max-width: min(420px, 85vw);
   padding: 8px 10px;
   border-radius: 4px;
   border: 1px solid #7a6548;
@@ -168,10 +166,13 @@ body {
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
   text-align: left;
   white-space: normal;
+  column-count: 2;
+  column-gap: 12px;
 }
 
 .event-deck-tip > span {
   display: block;
+  break-inside: avoid;
 }
 
 .event-deck-meta:hover .event-deck-tip,
@@ -1568,6 +1569,49 @@ button.danger {
   text-indent: 2em;
 }
 
+.rules-table-wrap {
+  margin: 10px 0 4px;
+  overflow-x: auto;
+}
+
+.rules-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+  line-height: 1.35;
+  color: #3a2a18;
+}
+
+.rules-table th,
+.rules-table td {
+  border: 1px solid #cbb89a;
+  padding: 6px 8px;
+  vertical-align: top;
+  text-align: left;
+}
+
+.rules-table th {
+  background: #e8dcc8;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.rules-table td:nth-child(1) {
+  width: 28%;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.rules-table td:nth-child(2) {
+  width: 3.2em;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.rules-table tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.35);
+}
+
 @media (max-width: 640px) {
   .rules-manual-layout {
     grid-template-columns: 1fr;
@@ -1579,6 +1623,10 @@ button.danger {
     padding-right: 0;
     padding-bottom: 8px;
     max-height: 28vh;
+  }
+
+  .rules-table td:nth-child(1) {
+    white-space: normal;
   }
 }
 

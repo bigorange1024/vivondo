@@ -1,9 +1,16 @@
 export type RulesLang = "zh" | "en";
 
+export interface RulesTable {
+  headers: { zh: string[]; en: string[] };
+  rows: { zh: string[]; en: string[] }[];
+}
+
 export interface RulesSection {
   id: string;
   title: { zh: string; en: string };
   body: { zh: string[]; en: string[] };
+  /** Optional table rendered after body paragraphs. */
+  table?: RulesTable;
 }
 
 /**
@@ -117,14 +124,234 @@ export const RULES_SECTIONS: RulesSection[] = [
     title: { zh: "事件与手牌", en: "Events & hold cards" },
     body: {
       zh: [
-        "外圈带「？」的格是事件格：抽一张立刻结算（给钱、扣钱、挪格子、住院、发代币、强制拍卖等）。顶栏「事件卡堆」悬停能看还剩哪些牌。",
+        "外圈带「？」的格是事件格：抽一张立刻结算。牌堆一共 24 张；每种卡做什么见下一章「事件卡清单」。顶栏「事件卡堆」悬停能看还剩哪些牌。",
         "出院卡、赌场 VIP 卡可以捏在手里（各最多一张）。再抽到同名卡时，那张回牌堆，银行补给你一笔（出院 100／VIP 200）。",
         "出院卡：本来要进医院时可以弃掉取消。VIP 卡：本来要进赌场，或自己抽到强制拍卖时，可以弃掉取消。两张卡不能互相替用。",
       ],
       en: [
-        "Outer “?” tiles draw an event and resolve it right away — cash, moves, hospital, tokens, forced auction, and so on. Hover the Event deck counter up top to peek at what's left.",
+        "Outer “?” tiles draw one event and resolve it. The deck has 24 cards — see Event card list for what each does. Hover the Event deck counter up top to peek at what's left.",
         "You may hold one Discharge card and one Casino VIP card. Drawing a duplicate returns that card to the deck and the bank pays you (100 for Discharge, 200 for VIP).",
         "Discharge: discard to cancel going to hospital. VIP: discard to cancel entering the casino, or to cancel a forced auction you just drew. They don't swap jobs.",
+      ],
+    },
+  },
+  {
+    id: "event-catalog",
+    title: { zh: "事件卡清单", en: "Event card list" },
+    body: {
+      zh: [
+        "全套 24 张。卡名写法：中文（English）。可持有卡 4 张，其余 20 张抽到就立刻结算。",
+      ],
+      en: [
+        "Full deck: 24 cards. Names are 中文（English）. Four are holdable; the other twenty resolve as soon as you draw them.",
+      ],
+    },
+    table: {
+      headers: {
+        zh: ["卡名", "张数", "效果"],
+        en: ["Card", "Qty", "Effect"],
+      },
+      rows: [
+        {
+          zh: [
+            "赌场VIP卡（Casino VIP）",
+            "2",
+            "捏在手里。即将进赌场，或自己抽到强制拍卖时，可弃掉取消。",
+          ],
+          en: [
+            "赌场VIP卡（Casino VIP）",
+            "2",
+            "Hold. Discard to cancel entering the casino, or a Forced Auction you drew.",
+          ],
+        },
+        {
+          zh: [
+            "出院卡（Discharge）",
+            "2",
+            "捏在手里。即将进医院时可弃掉取消入院。",
+          ],
+          en: [
+            "出院卡（Discharge）",
+            "2",
+            "Hold. Discard to cancel going to hospital.",
+          ],
+        },
+        {
+          zh: ["去银行（Go to Bank）", "1", "立刻移到银行起点，按停留领薪。"],
+          en: [
+            "去银行（Go to Bank）",
+            "1",
+            "Go to Bank/GO and take the landing salary.",
+          ],
+        },
+        {
+          zh: [
+            "进医院（Go to Hospital）",
+            "1",
+            "立刻送进医院（可弃出院卡取消）。",
+          ],
+          en: [
+            "进医院（Go to Hospital）",
+            "1",
+            "Go to hospital (Discharge can cancel).",
+          ],
+        },
+        {
+          zh: ["银行错误（Bank Error）", "1", "银行付给你 200。"],
+          en: ["银行错误（Bank Error）", "1", "Bank pays you 200."],
+        },
+        {
+          zh: ["选美获奖（Beauty Contest）", "1", "银行付给你 100。"],
+          en: ["选美获奖（Beauty Contest）", "1", "Bank pays you 100."],
+        },
+        {
+          zh: ["股票分红（Stock Dividend）", "1", "银行付给你 150。"],
+          en: ["股票分红（Stock Dividend）", "1", "Bank pays you 150."],
+        },
+        {
+          zh: ["所得税（Income Tax）", "1", "你付给银行 200。"],
+          en: ["所得税（Income Tax）", "1", "You pay the bank 200."],
+        },
+        {
+          zh: ["医疗费（Medical Fee）", "1", "你付给银行 100。"],
+          en: ["医疗费（Medical Fee）", "1", "You pay the bank 100."],
+        },
+        {
+          zh: [
+            "修路费（Road Repairs）",
+            "1",
+            "若有任意特殊地产，只付银行 100；否则按房屋最多的普通国家地付（房屋数＋1）×20（没有则付 0）。",
+          ],
+          en: [
+            "修路费（Road Repairs）",
+            "1",
+            "Any specialized country → pay 100; else (houses+1)×20 on your busiest normal country (0 if none).",
+          ],
+        },
+        {
+          zh: ["生日（Birthday）", "1", "每位其他玩家付给你 50。"],
+          en: ["生日（Birthday）", "1", "Each other player pays you 50."],
+        },
+        {
+          zh: ["董事长（Chairman）", "1", "你付给每位其他玩家 50。"],
+          en: ["董事长（Chairman）", "1", "You pay each other player 50."],
+        },
+        {
+          zh: [
+            "随机后退（Move Back）",
+            "1",
+            "再掷 1 骰，沿外圈后退该点数并结算（逆时针过起点不领薪）。",
+          ],
+          en: [
+            "随机后退（Move Back）",
+            "1",
+            "Roll 1d6, move back that many, then resolve (no GO salary counterclockwise).",
+          ],
+        },
+        {
+          zh: ["加速前进（Advance Again）", "1", "再掷 1 骰前进并结算新落点。"],
+          en: [
+            "加速前进（Advance Again）",
+            "1",
+            "Roll 1d6 forward and resolve the new tile.",
+          ],
+        },
+        {
+          zh: [
+            "机场贵宾（Airport VIP）",
+            "1",
+            "可免费飞到任意国家地产一次（也可不飞）；飞完若还没有飞机 token 会发一枚。",
+          ],
+          en: [
+            "机场贵宾（Airport VIP）",
+            "1",
+            "One free flight to any country (or skip); then a plane token if you don't have one.",
+          ],
+        },
+        {
+          zh: [
+            "港口贵宾（Port VIP）",
+            "1",
+            "可免费开到另一港口一次（也可不开）；完成后若还没有轮船 token 会发一枚；出航则本回合结束。",
+          ],
+          en: [
+            "港口贵宾（Port VIP）",
+            "1",
+            "One free sail to the other port (or skip); then a ship token if needed; sailing ends the turn.",
+          ],
+        },
+        {
+          zh: [
+            "油价波动（Oil Price Swing）",
+            "1",
+            "有油田则银行付你 200；没有则你付银行 100。",
+          ],
+          en: [
+            "油价波动（Oil Price Swing）",
+            "1",
+            "Own oil field → bank pays 200; else you pay 100.",
+          ],
+        },
+        {
+          zh: [
+            "矿难抚恤（Mine Relief）",
+            "1",
+            "有矿山则你付银行 150；没有则银行付你 50。",
+          ],
+          en: [
+            "矿难抚恤（Mine Relief）",
+            "1",
+            "Own mine → you pay 150; else bank pays 50.",
+          ],
+        },
+        {
+          zh: [
+            "证券招待（Stock Invite）",
+            "1",
+            "立刻移到证券交易所，并必须按提示参与奖池。",
+          ],
+          en: [
+            "证券招待（Stock Invite）",
+            "1",
+            "Go to Stock Exchange and must play the prize-pool prompt.",
+          ],
+        },
+        {
+          zh: [
+            "强制拍卖（Forced Auction）",
+            "1",
+            "必须选一块自己的国家地拍卖（不能选油田／矿山／港口）。可用赌场 VIP 卡取消。没有国家地则无效。",
+          ],
+          en: [
+            "强制拍卖（Forced Auction）",
+            "1",
+            "Auction one of your countries (not oil/mine/port). Casino VIP can cancel. No country → nothing.",
+          ],
+        },
+        {
+          zh: [
+            "位置互换（Swap Places）",
+            "1",
+            "可选一名不在赌场里的其他玩家互换外圈位置；换完双方都不结算新落点。也可不换。",
+          ],
+          en: [
+            "位置互换（Swap Places）",
+            "1",
+            "Optionally swap outer-ring spots with a player off the casino track; neither tile resolves. Or skip.",
+          ],
+        },
+        {
+          zh: [
+            "一次免租（One Free Rent）",
+            "1",
+            "领取 1 枚免租 token（已有则不再领）。",
+          ],
+          en: [
+            "一次免租（One Free Rent）",
+            "1",
+            "Take one rent-free token (skip if you already have one).",
+          ],
+        },
       ],
     },
   },
