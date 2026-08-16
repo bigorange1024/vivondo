@@ -354,6 +354,19 @@ export function IconProperty({ className, title }: IconProps) {
   );
 }
 
+/** Owned country-property count — small pennant (not a house). */
+export function IconLandFlag({ className, title }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" aria-hidden={!title}>
+      {title ? <title>{title}</title> : null}
+      <path
+        fill="currentColor"
+        d="M3.2 1.6h1.15v12.8H3.2zM4.35 2.1 13.2 5.05 4.35 8z"
+      />
+    </svg>
+  );
+}
+
 export function IconCasinoEntranceTile({ className, title }: IconProps) {
   return <IconPoker className={className} title={title} />;
 }

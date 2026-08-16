@@ -18,6 +18,7 @@
   createInitialState,
   currentPlayer,
   declineBuy,
+  declineOilOnSpecialRent,
   declineRentFree,
   declineUpgrade,
   endTurn,
@@ -51,6 +52,7 @@
   skipHospitalTurn,
   swapWith,
   useDischargeCard,
+  useOilOnSpecialRent,
   useRentFree,
   type GameConfig,
   type GameState,
@@ -84,6 +86,8 @@ export interface GameSession {
   acceptHospital(): void;
   useRentFree(): void;
   declineRentFree(): void;
+  useOilOnSpecialRent(): void;
+  declineOilOnSpecialRent(): void;
   cancelForceAuction(): void;
   proceedForceAuction(): void;
   pickForceAuctionTile(tileIndex: number): void;
@@ -300,6 +304,16 @@ function aiResolveSettle(state: GameState): GameState {
 
     if (s.prompt.kind === "rentFree") {
       s = useRentFree(s);
+      continue;
+    }
+
+    if (s.prompt.kind === "oilSpecialRent") {
+      const save = s.prompt.receivable - s.prompt.baseRent;
+      // Sacrifice oil when it saves a meaningful amount.
+      s =
+        save >= 80
+          ? useOilOnSpecialRent(s)
+          : declineOilOnSpecialRent(s);
       continue;
     }
 
@@ -796,6 +810,30 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     },
     declineRentFree() {
       state = declineRentFree(state);
+      emit();
+      if (
+        state.prompt.kind === "debtDemolishPick" ||
+        state.prompt.kind === "debtFacilitySell" ||
+        state.prompt.kind === "debtAuctionPick" ||
+        state.prompt.kind === "auction"
+      ) {
+        void runAiIfNeeded();
+      }
+    },
+    useOilOnSpecialRent() {
+      state = useOilOnSpecialRent(state);
+      emit();
+      if (
+        state.prompt.kind === "debtDemolishPick" ||
+        state.prompt.kind === "debtFacilitySell" ||
+        state.prompt.kind === "debtAuctionPick" ||
+        state.prompt.kind === "auction"
+      ) {
+        void runAiIfNeeded();
+      }
+    },
+    declineOilOnSpecialRent() {
+      state = declineOilOnSpecialRent(state);
       emit();
       if (
         state.prompt.kind === "debtDemolishPick" ||

@@ -37,6 +37,7 @@ import {
   IconDischarge,
   IconFactory,
   IconHouse,
+  IconLandFlag,
   IconPlane,
   IconShip,
   IconSuitcase,
@@ -737,11 +738,15 @@ function GameTable({
                 const owner = state.players.find((p) => p.id === ownerId);
                 if (!owner) return null;
                 const sw = legendContinentSwatchPercent(i);
+                const label =
+                  owner.kind === "ai"
+                    ? owner.name.replace(/\s+/g, "")
+                    : owner.name;
                 return (
                   <div
                     key={c.id}
                     className="legend-owner"
-                    title={`${c.zh} · 完整控制：${owner.name}（${owner.id}）`}
+                    title={`${c.zh}已由「${owner.name}」完整控制`}
                     style={{
                       left: `${sw.left}%`,
                       top: `${sw.top}%`,
@@ -750,7 +755,7 @@ function GameTable({
                       background: owner.color,
                     }}
                   >
-                    <span className="legend-owner-id">{owner.id}</span>
+                    <span className="legend-owner-name">{label}</span>
                   </div>
                 );
               })}
@@ -799,6 +804,11 @@ function GameTable({
                     }
                     return [];
                   });
+                  const ownedCountries = state.tiles.filter(
+                    (t) =>
+                      t.kind === "property" &&
+                      state.deeds[t.index]?.ownerId === p.id,
+                  ).length;
                   return (
                     <div
                       key={p.id}
@@ -827,8 +837,18 @@ function GameTable({
                             ))}
                           </span>
                         ) : null}
-                        <span className="pcash">
-                          <Money amount={p.cash} />
+                        <span className="prow-end">
+                          <span
+                            className="plands"
+                            title={`国家地产 ${ownedCountries}`}
+                            aria-label={`国家地产 ${ownedCountries}`}
+                          >
+                            <IconLandFlag className="plands-ico" />
+                            <span className="plands-n">{ownedCountries}</span>
+                          </span>
+                          <span className="pcash">
+                            <Money amount={p.cash} />
+                          </span>
                         </span>
                       </div>
                       <div className="ppos" title={`${loc.zh} / ${loc.en}`}>
@@ -1179,8 +1199,14 @@ function GameTable({
                   className="secondary"
                   onClick={() => session.declineUpgrade()}
                 >
-                  <BtnLabel zh="跳过" en="Skip upgrade" />
+                  <BtnLabel zh="跳过" en="Skip" />
                 </button>
+              </div>
+            </div>
+          )}
+
+          {humanTurn &&
+            (prompt.kind === "airport" || prompt.kind === "freeFlight") && (
               <div className="panel choice">
                 <div className="label">
                   {prompt.kind === "freeFlight" ? "机场贵宾（免费）" : "机场"}
@@ -1326,6 +1352,49 @@ function GameTable({
                   onClick={() => session.declineRentFree()}
                 >
                   <BtnLabel zh="照常付租" en="Pay rent as usual" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {humanTurn && prompt.kind === "oilSpecialRent" && (
+            <div className="panel choice">
+              <div className="label">油田 · 特性化地租</div>
+              <p>
+                {prompt.tileZh} 应收 <Money amount={prompt.receivable} />
+                {" · 基础 "}
+                <Money amount={prompt.baseRent} />
+              </p>
+              <p className="hint-one-line">
+                发动则只付基础地租，但油田无偿交还 GM；不发动则付全额并保留油田。
+              </p>
+              <div className="actions">
+                <button
+                  type="button"
+                  onClick={() => session.useOilOnSpecialRent()}
+                >
+                  <BtnLabel
+                    zh={
+                      <>
+                        发动油田 · 付 <Money amount={prompt.baseRent} />
+                      </>
+                    }
+                    en="Use oil · return field"
+                  />
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => session.declineOilOnSpecialRent()}
+                >
+                  <BtnLabel
+                    zh={
+                      <>
+                        付全额 · 保留油田 <Money amount={prompt.receivable} />
+                      </>
+                    }
+                    en="Pay full · keep oil"
+                  />
                 </button>
               </div>
             </div>
@@ -1558,6 +1627,7 @@ function GameTable({
           )}
 
           {current.kind === "ai" &&
+            !state.winnerId &&
             state.phase === "settle" &&
             prompt.kind === "idle" && (
               <div className="panel choice">

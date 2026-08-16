@@ -63,6 +63,31 @@ export function completeContinentCount(
   return n;
 }
 
+/** R-018-1: fully own ≥4 continents, including ≥1 five-country region. */
+export function meetsRegionDomination(
+  tiles: BoardTile[],
+  deeds: Record<number, DeedState>,
+  ownerId: string,
+): boolean {
+  const continents = [
+    ...new Set(
+      tiles
+        .filter((t) => t.kind === "property" && t.continent)
+        .map((t) => t.continent!),
+    ),
+  ];
+  const owned = continents.filter((c) =>
+    ownsContinent(tiles, deeds, ownerId, c),
+  );
+  if (owned.length < 4) return false;
+  return owned.some((c) => {
+    const n = tiles.filter(
+      (t) => t.kind === "property" && t.continent === c,
+    ).length;
+    return n === 5;
+  });
+}
+
 export function playerOwnsFacility(
   tiles: BoardTile[],
   deeds: Record<number, DeedState>,
@@ -147,7 +172,8 @@ export function receivableRent(
   return rent;
 }
 
-/** R-012 step 3 — oil adjustment on receivable. */
+/** R-012 step 3 — automatic oil cut on *unspecialized* rent only.
+ * Specialized tiles: payer chooses via oilSpecialRent prompt (R-027). */
 export function applyOilReduction(
   tiles: BoardTile[],
   deeds: Record<number, DeedState>,
@@ -156,16 +182,9 @@ export function applyOilReduction(
   receivable: number,
 ): number {
   if (!playerOwnsFacility(tiles, deeds, payerId, "油田")) return receivable;
-  const tile = tiles[tileIndex]!;
   const deed = deeds[tileIndex]!;
-  const base = tile.rent ?? 0;
-
-  if (deed.special == null) {
-    return Math.max(0, receivable - 10 * (1 + deed.houses));
-  }
-  // Commerce with 0 receivable stays 0; otherwise pay face base rent only.
-  if (deed.special === "commerce" && receivable === 0) return 0;
-  return base;
+  if (deed.special != null) return receivable;
+  return Math.max(0, receivable - 10 * (1 + deed.houses));
 }
 
 export function upgradeCost(

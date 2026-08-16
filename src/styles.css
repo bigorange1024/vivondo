@@ -246,9 +246,11 @@ body {
   align-items: center;
   justify-content: center;
   transform: translateY(calc(var(--board-scale) * -18px));
+  pointer-events: auto;
+  cursor: help;
 }
 
-.legend-owner-id {
+.legend-owner-name {
   color: #fff;
   font-weight: 800;
   font-size: calc(var(--board-scale) * 9px);
@@ -257,9 +259,9 @@ body {
   text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
   max-width: 100%;
   overflow: hidden;
-  text-overflow: clip;
+  text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 0 1px;
+  padding: 0 2px;
 }
 
 .token {
@@ -538,9 +540,7 @@ body {
 }
 
 .dest-btn .btn-label {
-  align-items: center;
   width: 100%;
-  text-align: center;
 }
 
 .actions.exit-actions .dest-btn .btn-label,
@@ -548,6 +548,17 @@ body {
 .actions.auction-actions .btn-label,
 .top-menu-btn .btn-label {
   align-items: center;
+  text-align: center;
+}
+
+.actions.exit-actions .dest-btn {
+  text-align: center;
+}
+
+.actions.exit-actions .dest-btn .btn-zh,
+.actions.exit-actions .dest-btn .btn-en {
+  align-items: center;
+  justify-content: center;
   text-align: center;
 }
 
@@ -672,12 +683,47 @@ body {
   height: calc(var(--board-scale) * 12px);
 }
 
+.plands {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: calc(var(--board-scale) * 1px);
+  flex: 0 0 auto;
+  min-width: calc(var(--board-scale) * 30px);
+  font-size: calc(var(--board-scale) * 13px);
+  font-weight: 700;
+  color: #3a5a7a;
+  font-variant-numeric: tabular-nums;
+}
+
+.plands-ico {
+  width: calc(var(--board-scale) * 13px);
+  height: calc(var(--board-scale) * 13px);
+  flex: 0 0 auto;
+}
+
+.plands-n {
+  min-width: 1.1em;
+  text-align: left;
+}
+
+.prow-end {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: calc(var(--board-scale) * 6px);
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
 .pcash {
   color: #1f7a3f;
   font-size: calc(var(--board-scale) * 15px);
   font-weight: 700;
   flex: 0 0 auto;
-  margin-left: auto;
+  min-width: calc(var(--board-scale) * 52px);
+  text-align: right;
+  margin-left: 0;
 }
 
 .ppos {
@@ -834,7 +880,7 @@ button.secondary:hover:not(:disabled) {
 /* 中性选择：飞往哪 / 加盖拆房拍卖选哪一块 */
 .dest-btn {
   width: 100%;
-  text-align: center;
+  text-align: left;
   padding: calc(var(--board-scale) * 5px) calc(var(--board-scale) * 7px);
   font-size: calc(var(--board-scale) * 13px);
   font-weight: 600;
@@ -851,8 +897,25 @@ button.secondary:hover:not(:disabled) {
 
 .dest-list .secondary {
   width: 100%;
-  text-align: center;
+  text-align: left;
   font-weight: 600;
+}
+
+/* Country / destination pickers: zh+en left-aligned */
+.dest-list .dest-btn .btn-label,
+.dest-list .dest-btn .btn-zh,
+.dest-list .dest-btn .btn-en {
+  align-items: flex-start;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.dest-list .secondary .btn-label,
+.dest-list .secondary .btn-zh,
+.dest-list .secondary .btn-en {
+  align-items: flex-start;
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .dest-btn:hover:not(:disabled) {
@@ -923,6 +986,24 @@ button.secondary:hover:not(:disabled) {
   flex-direction: row;
   flex-wrap: wrap;
   gap: calc(var(--board-scale) * 3px);
+}
+
+/* Specialize / build choice: keep action buttons sharing one row when possible */
+.panel.choice > .actions > button {
+  flex: 1 1 calc(22% - 3px);
+  min-width: calc(var(--board-scale) * 56px);
+  max-width: 100%;
+  padding: calc(var(--board-scale) * 4px) calc(var(--board-scale) * 6px);
+}
+
+.panel.choice > .actions > button .btn-en {
+  font-size: 0.58em;
+  white-space: nowrap;
+}
+
+.panel.choice > .actions > button.secondary {
+  flex: 0 1 auto;
+  min-width: calc(var(--board-scale) * 48px);
 }
 
 button {

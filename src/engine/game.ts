@@ -6,6 +6,7 @@
 import {
   applyOilReduction,
   emptyDeeds,
+  meetsRegionDomination,
   ownedPortCount,
   ownedTourismCount,
   playerOwnsFacility,
@@ -78,6 +79,15 @@ export type SettlePrompt =
   | { kind: "facilityOwn"; tileIndex: number }
   | { kind: "hospitalAdmit" }
   | { kind: "rentFree"; amount: number; landlordId: string; tileZh: string }
+  /** Specialized rent + oil: choose base+lose oil, or full+keep oil. */
+  | {
+      kind: "oilSpecialRent";
+      receivable: number;
+      baseRent: number;
+      landlordId: string;
+      tileZh: string;
+      tileIndex: number;
+    }
   | { kind: "freeFlight" }
   | { kind: "freeSail" }
   | { kind: "forceAuction" }
@@ -1109,6 +1119,16 @@ function checkWinner(state: GameState): GameState {
   }
   if (alive.length === 0) return state;
 
+  // R-018-1 · 区域称霸（完整 4 区且含至少一个 5 国区）
+  for (const p of alive) {
+    if (meetsRegionDomination(state.tiles, state.deeds, p.id)) {
+      return pushLog(
+        { ...state, winnerId: p.id },
+        `${p.name} 区域称霸获胜（完整拥有 4 个地产区，含 5 国区）`,
+      );
+    }
+  }
+
   // Solo / mixed: if every human is out, stop — do not spectate AI-only endgame.
   const humansAlive = alive.filter((p) => p.kind === "human");
   if (humansAlive.length === 0 && state.players.some((p) => p.kind === "human")) {
@@ -1163,6 +1183,9 @@ function applyStopGoSalary(state: GameState, playerIndex: number): GameState {
 
 export function rollDice(state: GameState): GameState {
   if (state.phase !== "roll" || state.winnerId) return state;
+  // Catch region domination already met (e.g. loaded save / missed buy path).
+  const beforeRoll = checkWinner(state);
+  if (beforeRoll.winnerId) return beforeRoll;
   const playerIndex = state.currentPlayerIndex;
   const player = state.players[playerIndex]!;
   if (player.eliminated) return state;
@@ -1773,13 +1796,6 @@ function settleOwnable(state: GameState, tile: BoardTile): GameState {
     tile.index,
     tourismDice,
   );
-  const due = applyOilReduction(
-    state.tiles,
-    state.deeds,
-    player.id,
-    tile.index,
-    receivable,
-  );
 
   let s = state;
   if (deed.special === "tourism" && tourismDice != null) {
@@ -1792,6 +1808,40 @@ function settleOwnable(state: GameState, tile: BoardTile): GameState {
       `旅游国：持有${tourN}处 + 掷骰${tourismDice} → ×${tourN + tourismDice} · 应收 ${receivable}`,
     );
   }
+
+  if (landlord && isHospitalized(landlord)) {
+    return pushLog(
+      { ...s, prompt: { kind: "idle" } },
+      `${landlord.name} 住院中，不能收取地租 · ${player.name} 在 ${tile.zh} 免付本次地租`,
+    );
+  }
+
+  // Specialized + oil: payer chooses (R-027). receivable 0 → no choice.
+  if (
+    deed.special != null &&
+    receivable > 0 &&
+    playerOwnsFacility(s.tiles, s.deeds, player.id, "油田")
+  ) {
+    return {
+      ...s,
+      prompt: {
+        kind: "oilSpecialRent",
+        receivable,
+        baseRent: tile.rent ?? 0,
+        landlordId: deed.ownerId!,
+        tileZh: tile.zh,
+        tileIndex: tile.index,
+      },
+    };
+  }
+
+  const due = applyOilReduction(
+    s.tiles,
+    s.deeds,
+    player.id,
+    tile.index,
+    receivable,
+  );
   if (due !== receivable) {
     s = pushLog(s, `油田减免：应收 ${receivable} → 实付 ${due}`);
   }
@@ -1803,20 +1853,13 @@ function settleOwnable(state: GameState, tile: BoardTile): GameState {
     );
   }
 
-  if (landlord && isHospitalized(landlord)) {
-    return pushLog(
-      { ...s, prompt: { kind: "idle" } },
-      `${landlord.name} 住院中，不能收取地租 · ${player.name} 在 ${tile.zh} 免付本次地租`,
-    );
-  }
-
   if (player.hasRentFree) {
     return {
       ...s,
       prompt: {
         kind: "rentFree",
         amount: due,
-        landlordId: deed.ownerId,
+        landlordId: deed.ownerId!,
         tileZh: tile.zh,
       },
     };
@@ -2282,8 +2325,13 @@ function finalizeSold(
     s,
     auction.source === "estate"
       ? `${s.players[buyerIndex]!.name} 以 ${salePrice} 拍得破产地产 ${tile.zh}`
-      : `${s.players[buyerIndex]!.name} 以 ${salePrice} 拍得 ${tile.zh} · 原地主得 ${toOwner}（GM 收一半）`,
+      : `${s.players[buyerIndex]!.name} 以 ${salePrice} 拍得 ${tile.zh} · 原地主得 ${toOwner}`,
   );
+
+  s = checkWinner(s);
+  if (s.winnerId) {
+    return { ...s, prompt: { kind: "idle" } };
+  }
 
   if (auction.source === "estate" || s.pendingEstate) {
     return continueEstateLiquidation(s);
@@ -2393,7 +2441,7 @@ export function chooseBuy(state: GameState): GameState {
   if (tile.kind === "port") {
     s2 = tryPortVisitBonus(s2, state.currentPlayerIndex, tile.index);
   }
-  return continueToPortIfOnPort(s2);
+  return checkWinner(continueToPortIfOnPort(s2));
 }
 
 export function sellFacility(state: GameState): GameState {
@@ -2794,6 +2842,93 @@ export function declineRentFree(state: GameState): GameState {
   return settleAfterPayDebt(s);
 }
 
+function reclaimOilToGm(state: GameState, ownerId: string): GameState {
+  const oil = state.tiles.find(
+    (t) =>
+      t.kind === "facility" &&
+      t.zh === "油田" &&
+      state.deeds[t.index]?.ownerId === ownerId,
+  );
+  if (!oil) return state;
+  const player = state.players.find((p) => p.id === ownerId);
+  return pushLog(
+    {
+      ...state,
+      deeds: {
+        ...state.deeds,
+        [oil.index]: { ownerId: null, houses: 0, special: null },
+      },
+    },
+    `${player?.name ?? ownerId} 发动油田效果，油田无偿交还 GM`,
+  );
+}
+
+function finishRentAfterOilChoice(
+  state: GameState,
+  due: number,
+  landlordId: string,
+  tileZh: string,
+): GameState {
+  const player = currentPlayer(state);
+  if (due <= 0) {
+    return pushLog(
+      { ...state, prompt: { kind: "idle" } },
+      `${player.name} 在 ${tileZh} 应付地租 0`,
+    );
+  }
+  if (player.hasRentFree) {
+    return {
+      ...state,
+      prompt: {
+        kind: "rentFree",
+        amount: due,
+        landlordId,
+        tileZh,
+      },
+    };
+  }
+  const s = payDebt(
+    state,
+    state.currentPlayerIndex,
+    due,
+    landlordId,
+    `${tileZh} 地租`,
+  );
+  return settleAfterPayDebt(s);
+}
+
+/** Use oil on specialized rent: pay base rent, return oil to GM free. */
+export function useOilOnSpecialRent(state: GameState): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "oilSpecialRent") {
+    return state;
+  }
+  const { receivable, baseRent, landlordId, tileZh } = state.prompt;
+  const player = currentPlayer(state);
+  if (!playerOwnsFacility(state.tiles, state.deeds, player.id, "油田")) {
+    return state;
+  }
+  let s = reclaimOilToGm(state, player.id);
+  s = pushLog(
+    s,
+    `油田发动：${tileZh} 应收 ${receivable} → 实付基础地租 ${baseRent}`,
+  );
+  return finishRentAfterOilChoice(s, baseRent, landlordId, tileZh);
+}
+
+/** Keep oil: pay full specialized rent. */
+export function declineOilOnSpecialRent(state: GameState): GameState {
+  if (state.phase !== "settle" || state.prompt.kind !== "oilSpecialRent") {
+    return state;
+  }
+  const { receivable, landlordId, tileZh } = state.prompt;
+  const player = currentPlayer(state);
+  const s = pushLog(
+    state,
+    `${player.name} 不发动油田，按特性化地租支付 ${tileZh} ${receivable}`,
+  );
+  return finishRentAfterOilChoice(s, receivable, landlordId, tileZh);
+}
+
 export function cancelForceAuction(state: GameState): GameState {
   if (state.phase !== "settle" || state.prompt.kind !== "forceAuction") {
     return state;
@@ -3020,6 +3155,9 @@ export function endTurn(state: GameState): GameState {
   if (state.phase !== "end" && state.phase !== "settle") return state;
   if (state.phase === "settle" && state.prompt.kind !== "idle") return state;
   if (state.winnerId) return state;
+
+  const won = checkWinner(state);
+  if (won.winnerId) return won;
 
   const n = state.players.length;
   let next = (state.currentPlayerIndex + 1) % n;
