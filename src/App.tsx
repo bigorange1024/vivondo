@@ -1,24 +1,109 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import boardUrl from "@assets/board-map-v7.png";
-import { BOARD_PNG, tileCenterPercent } from "./engine/board";
+import { BOARD_PNG, tileCenterPercent, tileContinentBarPercent } from "./engine/board";
 import { CARD_ZH } from "./engine/deck";
 import {
   getAuctionView,
   gunBuildOptions,
   gunDemolishOptions,
+  initiativeActorId,
   mafiaEntrances,
   ownedPropertiesForCurrent,
   ownedPropertiesForDebtor,
   propertyTiles,
 } from "./engine/game";
-import { racetrackSeatPercent } from "./engine/racetrack";
+import {
+  BOARD_TOP_STRIP,
+  PLAZA_HUD_PERCENT,
+  racetrackSeatPercent,
+} from "./engine/racetrack";
 import { createSoloSession, type GameState } from "./session/solo";
+import {
+  IconCoin,
+  IconDiceFace,
+  IconDischarge,
+  IconFactory,
+  IconHouse,
+  IconPlane,
+  IconShip,
+  IconSuitcase,
+  IconVipCard,
+} from "./ui/icons";
+import { locationView } from "./ui/location";
+import { LocFlag } from "./ui/locFlag";
+import { Money } from "./ui/money";
+
+/** Design width where HUD type/icons look correct at 1×. */
+const BOARD_DESIGN_WIDTH = 900;
+
+function DiceReadout({
+  lastDice,
+  lastTrackDice,
+  lastCasinoDice,
+}: {
+  lastDice: number | null;
+  lastTrackDice: [number, number] | null;
+  lastCasinoDice: [number, number] | null;
+}) {
+  if (lastTrackDice) {
+    const [a, b] = lastTrackDice;
+    return (
+      <div className="dice-readout" title={`${a}−${b}`}>
+        <IconDiceFace value={a} className="die-face" />
+        <span className="die-op">−</span>
+        <IconDiceFace value={b} className="die-face" />
+        <span className="die-sum">{a - b}</span>
+      </div>
+    );
+  }
+  if (lastCasinoDice) {
+    const [a, b] = lastCasinoDice;
+    return (
+      <div className="dice-readout" title={`${a}+${b}`}>
+        <IconDiceFace value={a} className="die-face" />
+        <span className="die-op">+</span>
+        <IconDiceFace value={b} className="die-face" />
+        <span className="die-sum">{a + b}</span>
+      </div>
+    );
+  }
+  if (lastDice == null) {
+    return <div className="dice-readout muted">—</div>;
+  }
+  return (
+    <div className="dice-readout" title={String(lastDice)}>
+      <IconDiceFace value={lastDice} className="die-face" />
+      <span className="die-sum">{lastDice}</span>
+    </div>
+  );
+}
 
 export default function App() {
   const session = useMemo(() => createSoloSession({ humans: 1, ais: 3 }), []);
   const [state, setState] = useState<GameState>(() => session.getState());
+  const boardFrameRef = useRef<HTMLDivElement>(null);
+  const [boardScale, setBoardScale] = useState(1);
 
   useEffect(() => session.subscribe(setState), [session]);
+
+  useEffect(() => {
+    const el = boardFrameRef.current;
+    if (!el) return;
+    const update = () => {
+      const w = el.clientWidth;
+      if (w <= 0) return;
+      // Scale by board width only — height-based scale was crushing HUD text/controls
+      setBoardScale(Math.max(0.72, Math.min(1.15, w / BOARD_DESIGN_WIDTH)));
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener("resize", update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
 
   const current = state.players[state.currentPlayerIndex]!;
   const auctionView = getAuctionView(state);
@@ -28,113 +113,138 @@ export default function App() {
   const humanBidding =
     !!auctionActor && auctionActor.kind === "human" && !state.winnerId;
 
+  const initiativeActor = (() => {
+    const id = initiativeActorId(state);
+    return id ? state.players.find((p) => p.id === id) : null;
+  })();
+
+  const prompt = state.prompt;
+
   const humanTurn =
     (current.kind === "human" && !state.winnerId) || humanBidding;
-  const canRoll =
+  const humanPairRoll =
+    state.phase === "settle" &&
+    (prompt.kind === "trackJudge" || prompt.kind === "casinoRoll") &&
     current.kind === "human" &&
+    !state.winnerId;
+
+  const humanInitiative =
+    state.phase === "initiative" &&
+    !!initiativeActor &&
+    initiativeActor.kind === "human" &&
+    !state.winnerId;
+  const canRoll =
     !state.winnerId &&
-    state.phase === "roll";
+    (humanInitiative ||
+      humanPairRoll ||
+      (current.kind === "human" && state.phase === "roll"));
   const canContinue =
     current.kind === "human" &&
     !state.winnerId &&
+    !humanPairRoll &&
     ((state.phase === "settle" && state.prompt.kind === "idle") ||
       state.phase === "end");
 
+  const pairFirst =
+    prompt.kind === "trackJudge" || prompt.kind === "casinoRoll"
+      ? prompt.first
+      : (state.initiative?.partialDie ?? null);
+
+  const rollButtonLabel = (() => {
+    if (state.phase === "initiative" || humanPairRoll) {
+      return pairFirst == null ? "掷第 1 次骰子" : "掷第 2 次骰子";
+    }
+    return "掷骰 Roll";
+  })();
+
   const playHeightRatio = BOARD_PNG.playSize / BOARD_PNG.height;
-  const prompt = state.prompt;
 
   const buyTile =
     prompt.kind === "buy" ? state.tiles[prompt.tileIndex] : null;
   const upgradeTile =
     prompt.kind === "upgrade" ? state.tiles[prompt.tileIndex] : null;
 
-  const tokenBits = (p: (typeof state.players)[0]) =>
-    [
-      p.hasPlane ? "飞机" : null,
-      p.hasShip ? "轮船" : null,
-      p.hasRentFree ? "免租" : null,
-      p.hasDischarge ? "出院卡" : null,
-      p.hasMafiaDeed ? "黑手党契" : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-
   const auctionTile =
     auctionView != null ? state.tiles[auctionView.auction.tileIndex] : null;
 
+  /** Only compact HUD for tall choice lists that otherwise clip buttons */
+  const choiceFocus =
+    humanTurn &&
+    (prompt.kind === "racetrackExit" ||
+      prompt.kind === "racetrackGunBuild" ||
+      prompt.kind === "racetrackGunDemolish" ||
+      prompt.kind === "airportDest" ||
+      prompt.kind === "forceAuctionPick" ||
+      prompt.kind === "debtAuctionPick" ||
+      prompt.kind === "swap");
+
+  const phaseLabel = state.winnerId
+    ? "终局"
+    : state.phase === "initiative"
+      ? "定出发顺序"
+      : humanPairRoll
+        ? prompt.kind === "trackJudge"
+          ? "跑马场判定"
+          : "证券掷骰"
+        : current.racetrackPos != null && state.phase === "roll"
+          ? "跑马场掷骰"
+          : state.phase === "roll"
+            ? "掷骰"
+            : state.phase === "settle"
+              ? "结算"
+              : "回合结束";
+
   return (
     <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <strong>花花世界</strong>
-          <span className="brand-en">Vivondo</span>
-        </div>
-        <div className="top-meta">
-          回合 {state.turn} · {current.name}
-          {current.racetrackPos != null
-            ? ` · 跑马场格 ${current.racetrackPos}`
-            : ""}
-          {current.hospitalSkips > 0
-            ? ` · 住院剩余 ${current.hospitalSkips}`
-            : ""}
-          {state.lastEvent ? ` · 上张 ${CARD_ZH[state.lastEvent]}` : ""}
-          {state.lastTrackDice
-            ? ` · 场内 ${state.lastTrackDice[0]}−${state.lastTrackDice[1]}`
-            : ""}
-          {" · "}
-          {state.winnerId
-            ? "终局"
-            : current.racetrackPos != null && state.phase === "roll"
-              ? "跑马场掷骰"
-              : state.phase === "roll"
-                ? "掷骰"
-                : state.phase === "settle"
-                  ? "结算"
-                  : "回合结束"}
-          {" · 奖池 "}
-          {state.casinoPool}
-          {" · 牌堆 "}
-          {state.eventDeck.drawPile.length}
-        </div>
-      </header>
-
       <main className="layout">
-        <aside className="players">
-          {state.players.map((p, idx) => (
-            <div
-              key={p.id}
-              className={`player-card${idx === state.currentPlayerIndex ? " active" : ""}${p.eliminated ? " out" : ""}`}
-              style={{ borderColor: p.color }}
-            >
-              <span className="dot" style={{ background: p.color }} />
-              <div>
-                <div className="pname">
-                  {p.name}
-                  {p.kind === "ai" ? " (AI)" : ""}
-                  {p.eliminated ? " · 出局" : ""}
-                </div>
-                <div className="pcash">¥{p.cash}</div>
-                <div className="ppos">
-                  {p.racetrackPos != null
-                    ? `跑马场 · ${p.racetrackPos}`
-                    : (state.tiles[p.position]?.zh ?? "—")}
-                </div>
-                {tokenBits(p) ? (
-                  <div className="ptokens">{tokenBits(p)}</div>
-                ) : null}
-              </div>
-            </div>
-          ))}
-        </aside>
-
         <section className="board-wrap">
-          <div className="board-frame">
+          <div
+            className="board-frame"
+            ref={boardFrameRef}
+            style={
+              {
+                "--board-scale": boardScale,
+              } as CSSProperties
+            }
+          >
             <img
               className="board-img"
               src={boardUrl}
               alt="花花世界棋盘"
               draggable={false}
             />
+
+            <div
+              className="board-top-strip"
+              style={{
+                left: `${BOARD_TOP_STRIP.left}%`,
+                top: `${BOARD_TOP_STRIP.top}%`,
+                width: `${BOARD_TOP_STRIP.width}%`,
+                height: `${BOARD_TOP_STRIP.height}%`,
+              }}
+            >
+              <div className="brand">
+                <strong>花花世界</strong>
+                <span className="brand-en">Vivondo</span>
+              </div>
+              <div className="top-meta">
+                <span>{state.phase === "initiative" ? "开局" : `回合 ${state.turn}`}</span>
+                <span>{current.name}</span>
+                {current.racetrackPos != null ? (
+                  <span>马场 {current.racetrackPos}</span>
+                ) : null}
+                {current.hospitalSkips > 0 ? (
+                  <span>住院 {current.hospitalSkips}</span>
+                ) : null}
+                {state.lastEvent ? (
+                  <span>上张 {CARD_ZH[state.lastEvent]}</span>
+                ) : null}
+                <span>{phaseLabel}</span>
+                <span>奖池 {state.casinoPool}</span>
+                <span>事件卡堆 {state.eventDeck.drawPile.length}</span>
+              </div>
+            </div>
+
             <div
               className="token-layer"
               style={{ height: `${playHeightRatio * 100}%` }}
@@ -145,84 +255,308 @@ export default function App() {
                 const owner = state.players.find((x) => x.id === deed.ownerId);
                 if (!owner) return null;
                 const { x, y } = tileCenterPercent(tile);
+                const bar =
+                  tile.kind === "property" ? tileContinentBarPercent(tile) : null;
+                const showHouses =
+                  tile.kind === "property" &&
+                  deed.special == null &&
+                  deed.houses > 0;
+                const showSpecial =
+                  tile.kind === "property" && deed.special != null;
                 return (
-                  <div
-                    key={`deed-${tile.index}`}
-                    className="deed-mark"
-                    title={`${tile.zh} · ${owner.name}`}
-                    style={{
-                      left: `${x}%`,
-                      top: `calc(${y}% + 12px)`,
-                      background: owner.color,
-                    }}
-                  >
-                    {deed.special
-                      ? deed.special === "industry"
-                        ? "工"
-                        : deed.special === "commerce"
-                          ? "商"
-                          : "旅"
-                      : tile.kind === "facility"
+                  <div key={`deed-${tile.index}`}>
+                    <div
+                      className="deed-mark"
+                      title={`${tile.zh} · ${owner.name}`}
+                      style={{
+                        left: `${x}%`,
+                        top: `calc(${y}% + ${4 * boardScale}px)`,
+                        background: owner.color,
+                      }}
+                    >
+                      {tile.kind === "facility"
                         ? tile.zh === "石油"
                           ? "油"
                           : "矿"
-                        : deed.houses > 0
-                          ? String(deed.houses)
-                          : ""}
+                        : null}
+                    </div>
+                    {bar && (showHouses || showSpecial) ? (
+                      <div
+                        className="deed-bar"
+                        style={{
+                          left: `${bar.left}%`,
+                          top: `${bar.top}%`,
+                          width: `${bar.width}%`,
+                          height: `${bar.height}%`,
+                        }}
+                        title={
+                          showSpecial
+                            ? deed.special === "industry"
+                              ? "工业国"
+                              : deed.special === "commerce"
+                                ? "商业国"
+                                : "旅游国"
+                            : `${deed.houses} 屋`
+                        }
+                      >
+                        {showSpecial ? (
+                          deed.special === "industry" ? (
+                            <IconFactory className="deed-bar-ico" />
+                          ) : deed.special === "commerce" ? (
+                            <IconCoin className="deed-bar-ico" />
+                          ) : (
+                            <IconSuitcase className="deed-bar-ico" />
+                          )
+                        ) : (
+                          Array.from({ length: deed.houses }, (_, i) => (
+                            <IconHouse key={i} className="deed-bar-ico" />
+                          ))
+                        )}
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}
-              {state.players.map((p, i) => {
-                if (p.eliminated) return null;
-                const seat =
+              {(() => {
+                const alive = state.players
+                  .map((p, i) => ({ p, i }))
+                  .filter(({ p }) => !p.eliminated);
+                /** 2×2 corner offsets so 4 tokens on one tile stay visible */
+                const STACK = [
+                  [-1, -1],
+                  [1, -1],
+                  [-1, 1],
+                  [1, 1],
+                ] as const;
+                const keyOf = (p: (typeof state.players)[0]) =>
                   p.racetrackPos != null
-                    ? racetrackSeatPercent(p.racetrackPos)
-                    : tileCenterPercent(state.tiles[p.position]!);
-                const offset = (i - (state.players.length - 1) / 2) * 10;
-                const label =
-                  p.racetrackPos != null
-                    ? `${p.name} @ 跑马场${p.racetrackPos}`
-                    : `${p.name} @ ${state.tiles[p.position]!.zh}`;
-                return (
-                  <div
-                    key={p.id}
-                    className={`token${p.racetrackPos != null ? " on-track" : ""}`}
-                    title={label}
-                    style={{
-                      left: `calc(${seat.x}% + ${offset}px)`,
-                      top: `calc(${seat.y}% + ${offset * 0.3}px)`,
-                      background: p.color,
-                      zIndex: i + 10,
-                    }}
-                  />
-                );
-              })}
+                    ? `t:${p.racetrackPos}`
+                    : `b:${p.position}`;
+                const groups = new Map<string, typeof alive>();
+                for (const item of alive) {
+                  const k = keyOf(item.p);
+                  const g = groups.get(k);
+                  if (g) g.push(item);
+                  else groups.set(k, [item]);
+                }
+                return alive.map(({ p, i }) => {
+                  const group = groups.get(keyOf(p))!;
+                  const stackIdx = group.findIndex((x) => x.p.id === p.id);
+                  const isActive = i === state.currentPlayerIndex;
+                  const seat =
+                    p.racetrackPos != null
+                      ? racetrackSeatPercent(p.racetrackPos)
+                      : tileCenterPercent(state.tiles[p.position]!);
+                  const stepPct = p.racetrackPos != null ? 1.05 : 1.55;
+                  const [sx, sy] = STACK[stackIdx] ?? [0, 0];
+                  const ox = group.length === 1 ? 0 : sx * stepPct;
+                  const oy = group.length === 1 ? 0 : sy * stepPct;
+                  const label =
+                    p.racetrackPos != null
+                      ? `${p.name} @ 跑马场${p.racetrackPos}`
+                      : `${p.name} @ ${state.tiles[p.position]!.zh}`;
+                  return (
+                    <div
+                      key={p.id}
+                      className={`token${p.racetrackPos != null ? " on-track" : ""}${isActive ? " active" : ""}`}
+                      title={label}
+                      style={{
+                        left: `${seat.x + ox}%`,
+                        top: `${seat.y + oy}%`,
+                        background: p.color,
+                        zIndex: isActive ? 40 : 12 + stackIdx,
+                      }}
+                    />
+                  );
+                });
+              })()}
             </div>
-          </div>
-        </section>
 
-        <aside className="controls">
-          <div className="panel">
+            <div
+              className="plaza-hud"
+              style={{
+                left: `${PLAZA_HUD_PERCENT.left}%`,
+                top: `${PLAZA_HUD_PERCENT.top * playHeightRatio}%`,
+                width: `${PLAZA_HUD_PERCENT.width}%`,
+                height: `${PLAZA_HUD_PERCENT.height * playHeightRatio}%`,
+              }}
+            >
+              <div className="plaza-players">
+                {state.players.map((p, idx) => {
+                  const loc = locationView(
+                    state.tiles[p.position],
+                    p.racetrackPos,
+                  );
+                  const LocIcon = loc.Icon;
+                  const locText =
+                    p.racetrackPos != null
+                      ? `${loc.zh} ${loc.code}·${p.racetrackPos}`
+                      : `${loc.zh} ${loc.code}`;
+                  return (
+                    <div
+                      key={p.id}
+                      className={`player-card${idx === state.currentPlayerIndex ? " active" : ""}${p.eliminated ? " out" : ""}${p.hospitalSkips > 0 ? " hospital" : ""}`}
+                      style={{ borderColor: p.color }}
+                    >
+                      <div className="prow">
+                        <span
+                          className="dot"
+                          style={{ background: p.color }}
+                        />
+                        <span className="pname">
+                          {p.name}
+                          {p.kind === "ai" ? "·AI" : ""}
+                        </span>
+                        <span className="pcash">
+                          <Money amount={p.cash} />
+                        </span>
+                      </div>
+                      <div className="ppos" title={`${loc.zh} / ${loc.en}`}>
+                        {loc.iso2 ? (
+                          <LocFlag iso2={loc.iso2} />
+                        ) : (
+                          <LocIcon className="loc-ico" />
+                        )}
+                        <span className="ploc">{locText}</span>
+                        {p.hospitalSkips > 0 ? (
+                          <span className="badge-h">住院{p.hospitalSkips}</span>
+                        ) : null}
+                        {p.eliminated ? (
+                          <span className="badge-out">出局</span>
+                        ) : null}
+                      </div>
+                      <div className="pinventory">
+                        <span
+                          className={`inv${p.hasPlane ? " on" : ""}`}
+                          title="飞机 token：银行禁领薪"
+                        >
+                          <IconPlane className="inv-ico" />
+                          飞机
+                        </span>
+                        <span
+                          className={`inv${p.hasShip ? " on" : ""}`}
+                          title="轮船 token：港口减船费"
+                        >
+                          <IconShip className="inv-ico" />
+                          轮船
+                        </span>
+                        <span
+                          className={`inv${p.hasRentFree ? " on" : ""}`}
+                          title="免租 token：抵一次地租"
+                        >
+                          <IconHouse className="inv-ico" />
+                          免租
+                        </span>
+                        <span
+                          className={`inv card${p.hasDischarge ? " on" : ""}`}
+                          title="出院卡：取消入院"
+                        >
+                          <IconDischarge className="inv-ico" />
+                          出院
+                        </span>
+                        <span
+                          className={`inv card${p.hasVipCard ? " on" : ""}`}
+                          title="赌场VIP卡：取消跑马场/强制拍卖"
+                        >
+                          <IconVipCard className="inv-ico" />
+                          VIP
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div
+                className={`plaza-controls${choiceFocus ? " choice-focus" : ""}`}
+              >
+          <div className="panel dice-panel">
             <div className="label">骰子</div>
-            <div className="dice">
-              {state.lastTrackDice
-                ? `${state.lastTrackDice[0]}−${state.lastTrackDice[1]}`
-                : state.lastCasinoDice
-                  ? `${state.lastCasinoDice[0]}+${state.lastCasinoDice[1]}`
-                  : state.lastDice == null
-                    ? "—"
-                    : state.lastDice}
-            </div>
+            <DiceReadout
+              lastDice={state.lastDice}
+              lastTrackDice={state.lastTrackDice}
+              lastCasinoDice={state.lastCasinoDice}
+            />
           </div>
 
+          <div className="panel step-stage">
+            <div className="step-result">
+              <div className="label">本步结果</div>
+              <ul className="result-list">
+                {state.log
+                  .slice(0, prompt.kind === "auction" ? 1 : 2)
+                  .map((line, i) => (
+                  <li
+                    key={`r-${i}-${line}`}
+                    className={i === 0 ? "latest" : undefined}
+                  >
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="step-ops">
+          {state.phase === "initiative" && initiativeActor && (
+            <div className="panel choice">
+              <div className="label">出发顺序</div>
+              <p>
+                {state.initiative?.playoff
+                  ? `加赛：${state.initiative.playoff.ids
+                      .map(
+                        (id) =>
+                          state.players.find((p) => p.id === id)?.name ?? id,
+                      )
+                      .join(" vs ")} · 请${initiativeActor.name}掷2次骰子（加赛结果不改变非加赛玩家的出发顺序）`
+                  : `请${initiativeActor.name}掷2次骰子，总点数大者先出发，平手需加赛（加赛结果不改变非加赛玩家的出发顺序）`}
+              </p>
+              {state.initiative?.partialDie != null ? (
+                <p className="muted">
+                  已掷第 1 次：{state.initiative.partialDie} · 请再掷第 2 次
+                </p>
+              ) : null}
+              {state.initiative && state.initiative.placed.length > 0 ? (
+                <p className="muted">
+                  已定档：
+                  {state.initiative.placed
+                    .map((e) => {
+                      const n =
+                        state.players.find((p) => p.id === e.id)?.name ?? e.id;
+                      return `${n}=${e.initial}`;
+                    })
+                    .join(" · ")}
+                </p>
+              ) : null}
+            </div>
+          )}
+          {humanPairRoll && (
+            <div className="panel choice">
+              <div className="label">
+                {prompt.kind === "trackJudge" ? "跑马场判定" : "证券交易所"}
+              </div>
+              <p>
+                {prompt.kind === "trackJudge"
+                  ? "请掷2次骰子（差值 = 第1次 − 第2次）"
+                  : "请掷2次骰子参与证券结算"}
+              </p>
+              {pairFirst != null ? (
+                <p className="muted">已掷第 1 次：{pairFirst} · 请再掷第 2 次</p>
+              ) : null}
+            </div>
+          )}
           {humanTurn && prompt.kind === "buy" && buyTile && (
             <div className="panel choice">
               <div className="label">
                 {buyTile.kind === "facility" ? "无主设施" : "无主地产"}
               </div>
               <p>
-                购买 {buyTile.zh}？¥{buyTile.price}
-                {buyTile.rent != null ? ` · 租 ${buyTile.rent}` : ""}
+                购买 {buyTile.zh}？
+                <Money amount={buyTile.price ?? 0} />
+                {buyTile.rent != null ? (
+                  <>
+                    {" · 租 "}
+                    <Money amount={buyTile.rent} />
+                  </>
+                ) : null}
               </p>
               <div className="actions">
                 <button
@@ -247,7 +581,8 @@ export default function App() {
             <div className="panel choice">
               <div className="label">己方设施</div>
               <p>
-                {state.tiles[prompt.tileIndex]?.zh} · 可半价 ¥500 退回 GM
+                {state.tiles[prompt.tileIndex]?.zh} · 可半价{" "}
+                <Money amount={500} /> 退回 GM
               </p>
               <div className="actions">
                 <button type="button" onClick={() => session.sellFacility()}>
@@ -266,15 +601,18 @@ export default function App() {
 
           {humanTurn && prompt.kind === "port" && (
             <div className="panel choice">
-              <div className="label">大西洋港口</div>
-              <p>出航船费 ¥400；轮船 token 可实付 200。出航后回合结束。</p>
+              <div className="label">港口</div>
+              <p>
+                出航船费 <Money amount={400} />；轮船 token 可实付{" "}
+                <Money amount={200} />。出航后回合结束。
+              </p>
               <div className="actions">
                 <button
                   type="button"
                   disabled={current.cash < 400}
                   onClick={() => session.portSail(false)}
                 >
-                  出航 ¥400
+                  出航 <Money amount={400} />
                 </button>
                 {current.hasShip && (
                   <button
@@ -282,7 +620,7 @@ export default function App() {
                     disabled={current.cash < 200}
                     onClick={() => session.portSail(true)}
                   >
-                    用轮船 ¥200
+                    用轮船 <Money amount={200} />
                   </button>
                 )}
                 <button
@@ -299,10 +637,23 @@ export default function App() {
           {humanTurn && prompt.kind === "upgrade" && upgradeTile && (
             <div className="panel choice">
               <div className="label">
-                {prompt.mode === "house" ? "加盖房屋" : "特性化"}
+                {prompt.mode === "house"
+                  ? "加盖房屋"
+                  : prompt.mode === "respecialize"
+                    ? "改造特殊地产"
+                    : "特性化"}
               </div>
               <p>
-                {upgradeTile.zh} · 费用 ¥{prompt.cost}
+                {upgradeTile.zh} · 费用 <Money amount={prompt.cost} />
+                {prompt.mode === "respecialize"
+                  ? ` · 现为${
+                      state.deeds[upgradeTile.index]?.special === "industry"
+                        ? "工业国"
+                        : state.deeds[upgradeTile.index]?.special === "commerce"
+                          ? "商业国"
+                          : "旅游国"
+                    }`
+                  : ""}
               </p>
               <div className="actions">
                 {prompt.mode === "house" ? (
@@ -315,27 +666,28 @@ export default function App() {
                   </button>
                 ) : (
                   <>
-                    <button
-                      type="button"
-                      disabled={current.cash < prompt.cost}
-                      onClick={() => session.upgrade("industry")}
-                    >
-                      工业国
-                    </button>
-                    <button
-                      type="button"
-                      disabled={current.cash < prompt.cost}
-                      onClick={() => session.upgrade("commerce")}
-                    >
-                      商业国
-                    </button>
-                    <button
-                      type="button"
-                      disabled={current.cash < prompt.cost}
-                      onClick={() => session.upgrade("tourism")}
-                    >
-                      旅游国
-                    </button>
+                    {(
+                      [
+                        ["industry", "工业国"],
+                        ["commerce", "商业国"],
+                        ["tourism", "旅游国"],
+                      ] as const
+                    )
+                      .filter(
+                        ([k]) =>
+                          prompt.mode !== "respecialize" ||
+                          state.deeds[upgradeTile.index]?.special !== k,
+                      )
+                      .map(([k, label]) => (
+                        <button
+                          key={k}
+                          type="button"
+                          disabled={current.cash < prompt.cost}
+                          onClick={() => session.upgrade(k)}
+                        >
+                          {label}
+                        </button>
+                      ))}
                   </>
                 )}
                 <button
@@ -396,7 +748,14 @@ export default function App() {
                         onClick={() => session.airportFlyTo(t.index)}
                       >
                         {t.zh}
-                        {fare ? ` · ¥${fare}` : " · 免费"}
+                        {fare ? (
+                          <>
+                            {" · "}
+                            <Money amount={fare} />
+                          </>
+                        ) : (
+                          " · 免费"
+                        )}
                       </button>
                     </li>
                   );
@@ -440,7 +799,7 @@ export default function App() {
             <div className="panel choice">
               <div className="label">免租 token</div>
               <p>
-                {prompt.tileZh} 实付地租 ¥{prompt.amount}
+                {prompt.tileZh} 实付地租 <Money amount={prompt.amount} />
               </p>
               <div className="actions">
                 <button type="button" onClick={() => session.useRentFree()}>
@@ -460,13 +819,15 @@ export default function App() {
           {humanTurn && prompt.kind === "portDispatch" && (
             <div className="panel choice">
               <div className="label">港口调度</div>
-              <p>领取 ¥100，或领取轮船 token（已有则不可领船）。</p>
+              <p>
+                领取 <Money amount={100} />，或领取轮船 token（已有则不可领船）。
+              </p>
               <div className="actions">
                 <button
                   type="button"
                   onClick={() => session.portDispatchTakeCash()}
                 >
-                  拿 ¥100
+                  拿 <Money amount={100} />
                 </button>
                 <button
                   type="button"
@@ -484,12 +845,12 @@ export default function App() {
               <div className="label">强制拍卖</div>
               <p>必须拍卖一处国家地产（视为 0 屋）。</p>
               <div className="actions">
-                {current.hasMafiaDeed && (
+                {current.hasVipCard && (
                   <button
                     type="button"
                     onClick={() => session.cancelForceAuction()}
                   >
-                    用黑手党地契取消
+                    用赌场VIP卡取消
                   </button>
                 )}
                 <button
@@ -514,7 +875,8 @@ export default function App() {
                       className="dest-btn"
                       onClick={() => session.pickForceAuctionTile(t.index)}
                     >
-                      {t.zh} · 地价 {t.price} · 起拍 {(t.price ?? 0) * 2}
+                      {t.zh} · 地价 <Money amount={t.price ?? 0} /> · 起拍{" "}
+                      <Money amount={(t.price ?? 0) * 2} />
                     </button>
                   </li>
                 ))}
@@ -526,7 +888,8 @@ export default function App() {
             <div className="panel choice dest-list">
               <div className="label">筹资拍卖</div>
               <p>
-                仍欠 {state.pendingDebt.reason} ¥{state.pendingDebt.amount}
+                仍欠 {state.pendingDebt.reason}{" "}
+                <Money amount={state.pendingDebt.amount} />
                 ，必须拍卖国家地产。
               </p>
               <ul>
@@ -537,7 +900,8 @@ export default function App() {
                       className="dest-btn"
                       onClick={() => session.pickDebtAuctionTile(t.index)}
                     >
-                      {t.zh} · 地价 {t.price} · 起拍 {(t.price ?? 0) * 2}
+                      {t.zh} · 地价 <Money amount={t.price ?? 0} /> · 起拍{" "}
+                      <Money amount={(t.price ?? 0) * 2} />
                     </button>
                   </li>
                 ))}
@@ -547,20 +911,12 @@ export default function App() {
 
           {prompt.kind === "auction" && auctionView && auctionTile && (
             <div className="panel choice auction-panel">
-              <div className="label">拍卖进行中 · {auctionTile.zh}</div>
-              <p>
-                起拍 ¥{auctionView.auction.startPrice} · 一口价 ¥
-                {auctionView.auction.buyoutPrice}
-                {auctionView.auction.currentBid > 0
-                  ? ` · 当前 ¥${auctionView.auction.currentBid}`
-                  : " · 尚无有效出价"}
-              </p>
-              <p className="auction-turn">
-                当前出价方：{auctionActor?.name ?? "—"}
-                {humanBidding ? "（请你出价）" : "（等待中）"}
-              </p>
+              <div className="label">
+                拍卖 · {auctionTile.zh}
+                {humanBidding ? " · 请你出价" : ` · ${auctionActor?.name ?? "—"}`}
+              </div>
               {humanBidding ? (
-                <div className="actions">
+                <div className="actions auction-actions">
                   <button
                     type="button"
                     disabled={
@@ -568,28 +924,29 @@ export default function App() {
                     }
                     onClick={() => session.auctionBid()}
                   >
-                    出价 ¥{auctionView.minBid}
+                    出价 <Money amount={auctionView.minBid} />
                   </button>
                   <button
                     type="button"
+                    className="dest-btn"
                     disabled={
                       (auctionActor?.cash ?? 0) <
                       auctionView.auction.buyoutPrice
                     }
                     onClick={() => session.auctionBuyout()}
                   >
-                    一口价 ¥{auctionView.auction.buyoutPrice}
+                    一口价 <Money amount={auctionView.auction.buyoutPrice} />
                   </button>
                   <button
                     type="button"
                     className="secondary"
                     onClick={() => session.auctionPass()}
                   >
-                    不出 / 弃权
+                    弃权
                   </button>
                 </div>
               ) : (
-                <p className="hint">AI 出价中，请稍候…</p>
+                <p className="auction-turn">AI 出价中，请稍候…</p>
               )}
             </div>
           )}
@@ -612,15 +969,15 @@ export default function App() {
 
           {humanTurn && prompt.kind === "mafiaEnter" && (
             <div className="panel choice">
-              <div className="label">黑手党入口</div>
-              <p>即将进入跑马场。可弃置黑手党地契取消。</p>
+              <div className="label">赌城入口</div>
+              <p>即将进入跑马场。可弃置赌场VIP卡取消。</p>
               <div className="actions">
-                {current.hasMafiaDeed && (
+                {current.hasVipCard && (
                   <button
                     type="button"
                     onClick={() => session.cancelMafiaEnter()}
                   >
-                    用黑手党地契取消
+                    用赌场VIP卡取消
                   </button>
                 )}
                 <button
@@ -636,28 +993,39 @@ export default function App() {
 
           {humanTurn && prompt.kind === "racetrackGunBuild" && (
             <div className="panel choice dest-list">
-              <div className="label">手枪 · 免费加盖</div>
-              <p>选择一块未满 3 屋的普通国家地产（不可特性化）。</p>
+              <div className="label">老虎机 · 免费加盖</div>
+              <p className="hint-one-line">
+                选择一处普通地产免费加盖一级房屋
+              </p>
               <ul>
                 {gunBuildOptions(state, current.id).map((t) => (
                   <li key={t.index}>
                     <button
                       type="button"
-                      className="dest-btn"
+                      className="dest-btn dest-btn-slim"
                       onClick={() => session.pickGunBuild(t.index)}
                     >
                       {t.zh} · 现 {state.deeds[t.index]?.houses ?? 0} 屋
                     </button>
                   </li>
                 ))}
+                <li>
+                  <button
+                    type="button"
+                    className="secondary dest-btn-slim"
+                    onClick={() => session.skipGunEffect()}
+                  >
+                    跳过
+                  </button>
+                </li>
               </ul>
             </div>
           )}
 
           {humanTurn && prompt.kind === "racetrackGunDemolish" && (
             <div className="panel choice dest-list">
-              <div className="label">手枪 · 拆房</div>
-              <p>普通地拆 1 屋无退款；特殊地拆后变普通 3 屋。</p>
+              <div className="label">老虎机 · 拆房</div>
+              <p className="hint-one-line">选择一处地产拆掉一级房屋</p>
               <ul>
                 {gunDemolishOptions(state, current.id).map((t) => {
                   const d = state.deeds[t.index]!;
@@ -665,45 +1033,53 @@ export default function App() {
                     <li key={t.index}>
                       <button
                         type="button"
-                        className="dest-btn"
+                        className="dest-btn dest-btn-slim"
                         onClick={() => session.pickGunDemolish(t.index)}
                       >
                         {t.zh}
                         {d.special
                           ? ` · 特殊→3屋`
-                          : ` · ${d.houses} 屋→${d.houses - 1}`}
+                          : ` · ${d.houses}屋→${d.houses - 1}`}
                       </button>
                     </li>
                   );
                 })}
+                <li>
+                  <button
+                    type="button"
+                    className="secondary dest-btn-slim"
+                    onClick={() => session.skipGunEffect()}
+                  >
+                    跳过
+                  </button>
+                </li>
               </ul>
             </div>
           )}
 
           {humanTurn && prompt.kind === "racetrackExit" && (
-            <div className="panel choice dest-list">
+            <div className="panel choice">
               <div className="label">跑马场离场</div>
-              <p>选择一处黑手党入口回到大地图。</p>
-              <ul>
+              <p>选择一处赌城入口回到大地图。</p>
+              <div className="actions exit-actions">
                 {mafiaEntrances(state).map((t) => (
-                  <li key={t.index}>
-                    <button
-                      type="button"
-                      className="dest-btn"
-                      onClick={() => session.chooseRacetrackExit(t.index)}
-                    >
-                      {t.zh}（格 {t.index}）
-                    </button>
-                  </li>
+                  <button
+                    key={t.index}
+                    type="button"
+                    className="dest-btn"
+                    onClick={() => session.chooseRacetrackExit(t.index)}
+                  >
+                    {t.zh}
+                  </button>
                 ))}
-              </ul>
+              </div>
             </div>
           )}
 
           {humanTurn && prompt.kind === "swap" && (
             <div className="panel choice dest-list">
               <div className="label">位置互换</div>
-              <p>与一名玩家互换位置（双方不结算新格）。</p>
+              <p className="hint-one-line">与一名玩家互换位置（双方不结算新格）</p>
               <ul>
                 {state.players
                   .filter(
@@ -716,31 +1092,35 @@ export default function App() {
                     <li key={p.id}>
                       <button
                         type="button"
-                        className="dest-btn"
+                        className="dest-btn dest-btn-slim"
                         onClick={() => session.swapWith(p.id)}
                       >
                         {p.name} @ {state.tiles[p.position]?.zh}
                       </button>
                     </li>
                   ))}
+                <li>
+                  <button
+                    type="button"
+                    className="secondary dest-btn-slim"
+                    onClick={() => session.skipSwap()}
+                  >
+                    不换
+                  </button>
+                </li>
               </ul>
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => session.skipSwap()}
-              >
-                不换
-              </button>
             </div>
           )}
+            </div>
+          </div>
 
-          <div className="actions">
+          <div className="actions main-actions">
             <button
               type="button"
               disabled={!canRoll}
               onClick={() => session.roll()}
             >
-              掷骰 Roll
+              {rollButtonLabel}
             </button>
             <button
               type="button"
@@ -750,19 +1130,19 @@ export default function App() {
               继续 Continue
             </button>
           </div>
+              </div>
 
-          <div className="panel log">
-            <div className="label">日志</div>
-            <ul>
-              {state.log.map((line, i) => (
-                <li key={`${i}-${line}`}>{line}</li>
-              ))}
-            </ul>
+              <div className="plaza-log panel log">
+                <div className="label">日志</div>
+                <ul>
+                  {state.log.map((line, i) => (
+                    <li key={`${i}-${line}`}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
           </div>
-          <p className="hint">
-            全环可玩：地产 / 角格 / 港口 / 设施 / 事件 / 拍卖 / 黑手党跑马场。
-          </p>
-        </aside>
+        </section>
       </main>
     </div>
   );

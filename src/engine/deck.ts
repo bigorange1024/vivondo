@@ -1,6 +1,6 @@
 /** R-030 event deck: 24 cards (4 holdable + 20 instant). */
 
-export type HoldKind = "discharge" | "mafia";
+export type HoldKind = "discharge" | "vip";
 
 export type InstantId =
   | "E01"
@@ -39,8 +39,8 @@ export interface EventDeckState {
 export const CARD_ZH: Record<EventCardId, string> = {
   H1: "出院卡",
   H2: "出院卡",
-  H3: "黑手党地契",
-  H4: "黑手党地契",
+  H3: "赌场VIP卡",
+  H4: "赌场VIP卡",
   E01: "前进到银行（起点）",
   E02: "进医院",
   E03: "银行错误",
@@ -57,7 +57,7 @@ export const CARD_ZH: Record<EventCardId, string> = {
   E14: "港口调度",
   E15: "油价波动",
   E16: "矿难抚恤",
-  E17: "赌场招待",
+  E17: "证券招待",
   E18: "强制拍卖",
   E19: "位置互换",
   E20: "一次免租",
@@ -65,7 +65,7 @@ export const CARD_ZH: Record<EventCardId, string> = {
 
 export function holdKindOf(id: EventCardId): HoldKind | null {
   if (id === "H1" || id === "H2") return "discharge";
-  if (id === "H3" || id === "H4") return "mafia";
+  if (id === "H3" || id === "H4") return "vip";
   return null;
 }
 

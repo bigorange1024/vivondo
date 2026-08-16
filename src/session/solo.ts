@@ -13,6 +13,7 @@ import {
   chooseBuy,
   chooseRacetrackExit,
   chooseUpgrade,
+  continuePairRoll,
   createInitialState,
   currentPlayer,
   declineBuy,
@@ -23,6 +24,7 @@ import {
   getAuctionView,
   gunBuildOptions,
   gunDemolishOptions,
+  initiativeActorId,
   keepFacility,
   mafiaEntrances,
   ownedPropertiesForCurrent,
@@ -31,6 +33,7 @@ import {
   pickForceAuctionTile,
   pickGunBuild,
   pickGunDemolish,
+  skipGunEffect,
   portDispatchTakeCash,
   portDispatchTakeShip,
   portSail,
@@ -38,6 +41,7 @@ import {
   proceedForceAuction,
   propertyTiles,
   rollDice,
+  rollInitiative,
   sellFacility,
   skipSwap,
   swapWith,
@@ -83,6 +87,7 @@ export interface GameSession {
   acceptMafiaEnter(): void;
   pickGunBuild(tileIndex: number): void;
   pickGunDemolish(tileIndex: number): void;
+  skipGunEffect(): void;
   chooseRacetrackExit(tileIndex: number): void;
   skipSwap(): void;
   swapWith(otherId: string): void;
@@ -191,9 +196,22 @@ function aiResolveSettle(state: GameState): GameState {
     }
 
     if (s.prompt.kind === "upgrade") {
-      const { cost, mode } = s.prompt;
+      const { cost, mode, tileIndex } = s.prompt;
       if (player.cash >= cost + 600) {
-        s = chooseUpgrade(s, mode === "specialize" ? "industry" : undefined);
+        if (mode === "house") {
+          s = chooseUpgrade(s);
+        } else if (mode === "specialize") {
+          s = chooseUpgrade(s, "industry");
+        } else {
+          const cur = s.deeds[tileIndex]?.special;
+          const next =
+            cur === "industry"
+              ? "commerce"
+              : cur === "commerce"
+                ? "tourism"
+                : "industry";
+          s = chooseUpgrade(s, next);
+        }
       } else {
         s = declineUpgrade(s);
       }
@@ -250,7 +268,7 @@ function aiResolveSettle(state: GameState): GameState {
     }
 
     if (s.prompt.kind === "forceAuction") {
-      s = player.hasMafiaDeed
+      s = player.hasVipCard
         ? cancelForceAuction(s)
         : proceedForceAuction(s);
       continue;
@@ -280,7 +298,7 @@ function aiResolveSettle(state: GameState): GameState {
     }
 
     if (s.prompt.kind === "mafiaEnter") {
-      s = player.hasMafiaDeed ? cancelMafiaEnter(s) : acceptMafiaEnter(s);
+      s = player.hasVipCard ? cancelMafiaEnter(s) : acceptMafiaEnter(s);
       continue;
     }
 
@@ -329,17 +347,20 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
   /** After AI settle becomes idle (e.g. auction done), close turn and chain. */
   const finishAiSettleAndContinue = () => {
     if (state.winnerId) return;
-    const cur = state.players[state.currentPlayerIndex]!;
-    if (cur.kind !== "ai" || cur.eliminated) return;
 
+    // Close settle even if current player just went bankrupt (estate auctions done).
     if (state.phase === "settle" && state.prompt.kind === "idle") {
       state = finishSettlement(state);
     }
     if (state.phase === "end") {
       state = endTurn(state);
+      emit();
+      queueMicrotask(runAiIfNeeded);
+      return;
     }
-    emit();
-    queueMicrotask(runAiIfNeeded);
+
+    const cur = state.players[state.currentPlayerIndex]!;
+    if (cur.kind !== "ai" || cur.eliminated) return;
   };
 
   const continueAiAuctionIfNeeded = () => {
@@ -388,15 +409,46 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
 
   const runAiIfNeeded = () => {
     if (state.winnerId) return;
+
+    // Opening order: auto-roll for AI actors only
+    if (state.phase === "initiative") {
+      let guard = 0;
+      while (state.phase === "initiative" && guard++ < 80) {
+        const actorId = initiativeActorId(state);
+        if (!actorId) break;
+        const actor = state.players.find((p) => p.id === actorId);
+        if (!actor || actor.kind !== "ai") break;
+        state = rollInitiative(state);
+        emit();
+      }
+      // Still waiting on a human roll — stop. If finalize flipped to "roll", fall through.
+      if (state.phase === "initiative") return;
+    }
+
     const p = state.players[state.currentPlayerIndex]!;
-    if (p.kind !== "ai" || p.eliminated) return;
+
+    // Estate / debt auctions may run while current player is already eliminated.
+    if (state.phase === "settle" && state.prompt.kind === "auction") {
+      queueMicrotask(continueAiAuctionIfNeeded);
+      return;
+    }
+
+    if (p.eliminated) {
+      if (state.phase === "settle" && state.prompt.kind === "idle") {
+        state = finishSettlement(state);
+      }
+      if (state.phase === "end") {
+        state = endTurn(state);
+        emit();
+        queueMicrotask(runAiIfNeeded);
+      }
+      return;
+    }
+
+    if (p.kind !== "ai") return;
 
     // Resume mid-settle (e.g. after human auction bid ended)
     if (state.phase === "settle") {
-      if (state.prompt.kind === "auction") {
-        queueMicrotask(continueAiAuctionIfNeeded);
-        return;
-      }
       if (state.prompt.kind !== "idle") {
         state = aiResolveSettle(state);
         emit();
@@ -482,6 +534,11 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     });
   };
 
+
+
+  // Opening order may put an AI first — start their turn
+  queueMicrotask(runAiIfNeeded);
+
   return {
     kind: "solo",
     getState: () => state,
@@ -491,8 +548,34 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       return () => listeners.delete(listener);
     },
     roll() {
+      if (state.winnerId) return;
+      if (state.phase === "initiative") {
+        const actorId = initiativeActorId(state);
+        const actor = actorId
+          ? state.players.find((p) => p.id === actorId)
+          : null;
+        if (!actor || actor.kind !== "human") return;
+        state = rollInitiative(state);
+        emit();
+        queueMicrotask(runAiIfNeeded);
+        return;
+      }
+      if (
+        state.phase === "settle" &&
+        (state.prompt.kind === "trackJudge" ||
+          state.prompt.kind === "casinoRoll")
+      ) {
+        const p = state.players[state.currentPlayerIndex]!;
+        if (p.kind !== "human") return;
+        state = continuePairRoll(state);
+        emit();
+        if (state.prompt.kind === "auction") {
+          queueMicrotask(continueAiAuctionIfNeeded);
+        }
+        return;
+      }
       const p = state.players[state.currentPlayerIndex]!;
-      if (p.kind !== "human" || state.phase !== "roll" || state.winnerId) return;
+      if (p.kind !== "human" || state.phase !== "roll") return;
       state = rollDice(state);
       emit();
       if (state.prompt.kind === "auction") {
@@ -639,6 +722,10 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
       state = pickGunDemolish(state, tileIndex);
       emit();
     },
+    skipGunEffect() {
+      state = skipGunEffect(state);
+      emit();
+    },
     chooseRacetrackExit(tileIndex: number) {
       state = chooseRacetrackExit(state, tileIndex);
       emit();
@@ -660,6 +747,7 @@ export function createSoloSession(config?: Partial<GameConfig>): GameSession {
     load(raw: string) {
       state = JSON.parse(raw) as GameState;
       emit();
+      queueMicrotask(runAiIfNeeded);
     },
   };
 }

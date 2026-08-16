@@ -16,69 +16,111 @@ export interface AuctionState {
   activeIds: string[];
   /** Index into `order` for whose action is next. */
   cursor: number;
-  source: "e18" | "debt";
+  source: "e18" | "debt" | "estate";
   /** Opening 2d6 results (after tie breaks), for UI/log. */
   rolls: Record<string, number>;
 }
 
+export function roll2d6Pair(): [number, number] {
+  return [
+    1 + Math.floor(Math.random() * 6),
+    1 + Math.floor(Math.random() * 6),
+  ];
+}
+
 function roll2d6(): number {
-  return (
-    1 +
-    Math.floor(Math.random() * 6) +
-    (1 + Math.floor(Math.random() * 6))
+  const [a, b] = roll2d6Pair();
+  return a + b;
+}
+
+/**
+ * Order by 2d6 (higher first).
+ * Same total forms a band: only those players re-roll among themselves until unique.
+ * Playoff rolls never leap past players in other bands (R-004 / R-017-C1).
+ *
+ * Example: A=7, B=8, C=8, D=10 → bands D | B,C | A; B↔C playoff only → D→B→C→A or D→C→B→A.
+ */
+export function resolveDiceOrder(playerIds: string[]): {
+  order: string[];
+  /** Initial 2d6 that decide bands vs everyone else. */
+  initialRolls: Record<string, number>;
+  /** Display rolls: playoff result within a band, else initial. */
+  rolls: Record<string, number>;
+} {
+  if (playerIds.length === 0) {
+    return { order: [], initialRolls: {}, rolls: {} };
+  }
+  if (playerIds.length === 1) {
+    const id = playerIds[0]!;
+    const roll = roll2d6();
+    return {
+      order: [id],
+      initialRolls: { [id]: roll },
+      rolls: { [id]: roll },
+    };
+  }
+
+  const initialRolls: Record<string, number> = {};
+  for (const id of playerIds) initialRolls[id] = roll2d6();
+
+  const bandScores = [...new Set(Object.values(initialRolls))].sort(
+    (a, b) => b - a,
   );
+  const order: string[] = [];
+  const rolls: Record<string, number> = { ...initialRolls };
+
+  for (const score of bandScores) {
+    let group = playerIds.filter((id) => initialRolls[id] === score);
+    if (group.length === 1) {
+      order.push(group[0]!);
+      continue;
+    }
+
+    // Pairwise / group playoffs — re-roll only still-tied members inside this band
+    const playoff: Record<string, number> = {};
+    for (const id of group) playoff[id] = roll2d6();
+
+    let guard = 0;
+    while (guard++ < 50) {
+      const byVal = new Map<number, string[]>();
+      for (const id of group) {
+        const v = playoff[id]!;
+        const list = byVal.get(v);
+        if (list) list.push(id);
+        else byVal.set(v, [id]);
+      }
+      let anyTie = false;
+      for (const [, ids] of byVal) {
+        if (ids.length > 1) {
+          anyTie = true;
+          for (const id of ids) playoff[id] = roll2d6();
+        }
+      }
+      if (!anyTie) break;
+    }
+
+    group = [...group].sort(
+      (a, b) => playoff[b]! - playoff[a]! || a.localeCompare(b),
+    );
+    for (const id of group) {
+      rolls[id] = playoff[id]!;
+      order.push(id);
+    }
+  }
+
+  return { order, initialRolls, rolls };
 }
 
 /**
  * Bid order: each rolls 2d6, higher first.
- * Ties re-roll only within the tied group (R-017-C1).
+ * Ties re-roll only within the tied band (R-017-C1).
  */
 export function resolveBidOrder(playerIds: string[]): {
   order: string[];
   rolls: Record<string, number>;
 } {
-  if (playerIds.length === 0) return { order: [], rolls: {} };
-  if (playerIds.length === 1) {
-    const id = playerIds[0]!;
-    const roll = roll2d6();
-    return { order: [id], rolls: { [id]: roll } };
-  }
-
-  const rolls: Record<string, number> = {};
-  for (const id of playerIds) rolls[id] = roll2d6();
-
-  let guard = 0;
-  while (guard++ < 50) {
-    const sorted = [...playerIds].sort(
-      (a, b) => rolls[b]! - rolls[a]! || a.localeCompare(b),
-    );
-    let tiedStart = -1;
-    let tiedEnd = -1;
-    for (let i = 0; i < sorted.length - 1; i++) {
-      if (rolls[sorted[i]!] === rolls[sorted[i + 1]!]) {
-        tiedStart = i;
-        tiedEnd = i + 1;
-        while (
-          tiedEnd + 1 < sorted.length &&
-          rolls[sorted[tiedEnd + 1]!] === rolls[sorted[tiedStart]!]
-        ) {
-          tiedEnd += 1;
-        }
-        break;
-      }
-    }
-    if (tiedStart < 0) {
-      return { order: sorted, rolls: { ...rolls } };
-    }
-    for (let i = tiedStart; i <= tiedEnd; i++) {
-      rolls[sorted[i]!] = roll2d6();
-    }
-  }
-
-  const order = [...playerIds].sort(
-    (a, b) => rolls[b]! - rolls[a]! || a.localeCompare(b),
-  );
-  return { order, rolls: { ...rolls } };
+  const { order, rolls } = resolveDiceOrder(playerIds);
+  return { order, rolls };
 }
 
 export function createAuction(input: {
@@ -86,7 +128,7 @@ export function createAuction(input: {
   sellerId: string;
   price: number;
   bidderIds: string[];
-  source: "e18" | "debt";
+  source: "e18" | "debt" | "estate";
 }): AuctionState {
   const { order, rolls } = resolveBidOrder(input.bidderIds);
   return {

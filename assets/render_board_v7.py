@@ -1,11 +1,40 @@
 # -*- coding: utf-8 -*-
-"""Generate accurate board-map PNG with simplified flags."""
+"""Generate accurate board-map PNG with real national flags."""
 import math
 from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
 
 OUT = Path(__file__).resolve().parent / "board-map-v7.png"
 FONTS_DIR = Path(__file__).resolve().parent / "fonts"
+FLAGS_DIR = Path(__file__).resolve().parent / "flags"
+ICONS_DIR = Path(__file__).resolve().parent / "icons"
+
+
+def _load_icon(name: str) -> Image.Image:
+    return Image.open(ICONS_DIR / f"{name}.png").convert("RGBA")
+
+
+# Grok/AI original icons (see assets/import_icons.py)
+ICONS = {
+    name: _load_icon(name)
+    for name in (
+        "horse-head",
+        "horse-head-dark",
+        "oil",
+        "mine",
+        "ship",
+        "airport",
+        "hospital",
+        "exchange",
+        "bank",
+        "cards",
+        "chips",
+        "cash",
+        "cash-dark",
+        "slot",
+        "slot-dark",
+    )
+}
 
 ASIA = (198, 40, 40)
 EUROPE = (13, 71, 161)
@@ -20,6 +49,9 @@ MAFIA_FG = (240, 240, 240)
 TILE_BG = (247, 243, 234)
 WHITE = (255, 255, 255)
 LINE = (180, 160, 130)
+TILE_EDGE = (28, 28, 28)  # bold cell outline
+TILE_GAP = 3  # half-gap per side → ~6px between adjacent cells
+TILE_EDGE_W = 3
 START_BG = (232, 168, 56)
 CENTER_BG = (220, 230, 240)  # 雾蓝广场，避免 Monopoly 式绿心
 TRACK_INFIELD = (90, 130, 95)  # 跑马场内圈深绿
@@ -29,7 +61,7 @@ INK = (42, 42, 42)
 
 # (kind, zh, en, color, price, flag_key)
 # 顺时针自左下起点：左边→顶边→右边→底边
-# 每边最多 2 个 E；意/美后「黑手党 + E」；伊朗后石油、智利后矿山；英/墨后大西洋港口
+# 每边最多 2 个 E；意/美后「赌城入口 + E」；伊朗后石油、智利后矿山；英/墨后大西洋港口
 LEFT = [
     ("property", "日本", "Japan", ASIA, "560/70", "jp"),
     ("property", "中国", "China", ASIA, "580/75", "cn"),
@@ -47,7 +79,7 @@ TOP = [
     ("port", "港口", "Port", None, "400", "port_n"),
     ("property", "法国", "France", EUROPE, "560/70", "fr"),
     ("property", "意大利", "Italy", EUROPE, "440/55", "it"),
-    ("mafia", "黑手党", "Mafia", None, "", None),
+    ("mafia", "蒙特卡洛赌城", "Monte Carlo", None, "", "cards"),
     ("event", "事件", "Event", None, "", None),
     ("property", "埃及", "Egypt", AFRICA, "240/30", "eg"),
     ("property", "摩洛哥", "Morocco", AFRICA, "210/25", "ma"),
@@ -71,7 +103,7 @@ BOTTOM = [
     ("port", "港口", "Port", None, "400", "port_s"),
     ("property", "加拿大", "Canada", NA, "520/65", "ca"),
     ("property", "美国", "USA", NA, "600/75", "us"),
-    ("mafia", "黑手党", "Mafia", None, "", None),
+    ("mafia", "拉斯维加斯赌城", "Las Vegas", None, "", "chips"),
     ("event", "事件", "Event", None, "", None),
     ("property", "新西兰", "New Zealand", OCEANIA, "400/50", "nz"),
     ("property", "澳大利亚", "Australia", OCEANIA, "510/65", "au"),
@@ -134,237 +166,31 @@ def draw_bilingual(draw, xy, zh, en, fnt_zh, fnt_en, fill=INK, gap=1):
     draw.text((x0 + (x1 - x0 - ew) / 2, ty + zh_h + gap - be[1]), en, font=fnt_en, fill=fill)
 
 
-def hstripes(d, box, colors):
-    x0, y0, x1, y1 = box
-    n = len(colors)
-    for i, c in enumerate(colors):
-        a = y0 + (y1 - y0) * i // n
-        b = y0 + (y1 - y0) * (i + 1) // n
-        d.rectangle([x0, a, x1, b], fill=c)
-
-
-def vstripes(d, box, colors):
-    x0, y0, x1, y1 = box
-    n = len(colors)
-    for i, c in enumerate(colors):
-        a = x0 + (x1 - x0) * i // n
-        b = x0 + (x1 - x0) * (i + 1) // n
-        d.rectangle([a, y0, b, y1], fill=c)
-
-
-def draw_star(d, cx, cy, r, fill, points=5, width=0):
-    """Regular star polygon (default 5-point)."""
-    pts = []
-    for i in range(points * 2):
-        ang = -math.pi / 2 + i * math.pi / points
-        rad = r if i % 2 == 0 else r * 0.40
-        pts.append((cx + rad * math.cos(ang), cy + rad * math.sin(ang)))
-    if width:
-        d.polygon(pts, outline=fill, width=width)
+def paste_flag(tile: Image.Image, box, key: str):
+    """Paste a real national flag PNG into the tile box (cover + thin border)."""
+    x0, y0, x1, y1 = [int(v) for v in box]
+    tw, th = max(1, x1 - x0), max(1, y1 - y0)
+    path = FLAGS_DIR / f"{key}.png"
+    d = ImageDraw.Draw(tile)
+    if not path.exists():
+        d.rectangle([x0, y0, x1, y1], fill=(200, 200, 200), outline=(120, 120, 120), width=1)
+        return
+    flag = Image.open(path).convert("RGBA")
+    fw, fh = flag.size
+    # Cover the box while preserving aspect ratio, then center-crop
+    scale = max(tw / fw, th / fh)
+    nw, nh = max(1, int(fw * scale + 0.5)), max(1, int(fh * scale + 0.5))
+    flag = flag.resize((nw, nh), Image.Resampling.LANCZOS)
+    left = max(0, (nw - tw) // 2)
+    top = max(0, (nh - th) // 2)
+    flag = flag.crop((left, top, left + tw, top + th))
+    if flag.mode == "RGBA":
+        base = Image.new("RGB", flag.size, TILE_BG)
+        base.paste(flag, mask=flag.split()[3])
+        tile.paste(base, (x0, y0))
     else:
-        d.polygon(pts, fill=fill)
-
-
-def draw_union_jack(d, box):
-    """Small Union Jack for cantons (AU / NZ / FJ / GB)."""
-    x0, y0, x1, y1 = box
-    w, h = x1 - x0, y1 - y0
-    d.rectangle([x0, y0, x1, y1], fill=(1, 33, 105))
-    # St Andrew white saltire
-    lw = max(2, min(w, h) // 7)
-    d.line([x0, y0, x1, y1], fill=WHITE, width=lw)
-    d.line([x0, y1, x1, y0], fill=WHITE, width=lw)
-    # St Patrick thin red (approx)
-    rw = max(1, lw // 2)
-    d.line([x0, y0, x1, y1], fill=(200, 16, 46), width=rw)
-    d.line([x0, y1, x1, y0], fill=(200, 16, 46), width=rw)
-    # St George cross
-    cw = max(2, min(w, h) // 5)
-    d.rectangle([x0 + w // 2 - cw // 2, y0, x0 + w // 2 + cw // 2, y1], fill=WHITE)
-    d.rectangle([x0, y0 + h // 2 - cw // 2, x1, y0 + h // 2 + cw // 2], fill=WHITE)
-    rw2 = max(1, cw // 2)
-    d.rectangle([x0 + w // 2 - rw2 // 2, y0, x0 + w // 2 + rw2 // 2, y1], fill=(200, 16, 46))
-    d.rectangle([x0, y0 + h // 2 - rw2 // 2, x1, y0 + h // 2 + rw2 // 2], fill=(200, 16, 46))
-
-
-def draw_flag(d, box, key):
-    """Simplified recognizable flags."""
-    x0, y0, x1, y1 = box
-    w, h = x1 - x0, y1 - y0
-    d.rectangle([x0, y0, x1, y1], outline=(120, 120, 120), width=1)
-
-    def mid():
-        return (x0 + x1) // 2, (y0 + y1) // 2
-
-    if key == "jp":
-        d.rectangle([x0, y0, x1, y1], fill=WHITE)
-        cx, cy = mid()
-        r = min(w, h) // 4
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(188, 0, 45))
-    elif key == "cn":
-        d.rectangle([x0, y0, x1, y1], fill=(222, 41, 16))
-        # simple yellow star block
-        s = max(2, min(w, h) // 8)
-        d.rectangle([x0 + w // 8, y0 + h // 8, x0 + w // 8 + s * 2, y0 + h // 8 + s * 2], fill=(255, 222, 0))
-    elif key == "in":
-        hstripes(d, box, [(255, 153, 51), WHITE, (18, 136, 7)])
-        cx, cy = mid()
-        r = min(w, h) // 8
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=(0, 0, 128), width=max(1, w // 30))
-    elif key == "ir":
-        hstripes(d, box, [(35, 159, 64), WHITE, (218, 0, 0)])
-        cx, cy = mid()
-        # red diamond for national emblem (simplified)
-        r = max(3, min(w, h) // 6)
-        d.polygon([(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)], fill=(218, 0, 0))
-    elif key == "sa":
-        d.rectangle([x0, y0, x1, y1], fill=(0, 84, 48))
-        # white emblem band so it is not mistaken for Oceania bar color
-        d.rectangle([x0 + w // 6, y0 + h // 3, x1 - w // 6, y1 - h // 3], fill=WHITE)
-    elif key == "ru":
-        hstripes(d, box, [WHITE, (0, 57, 166), (213, 43, 30)])
-    elif key == "de":
-        hstripes(d, box, [(0, 0, 0), (221, 0, 0), (255, 206, 0)])
-    elif key == "gb":
-        draw_union_jack(d, box)
-    elif key == "fr":
-        vstripes(d, box, [(0, 85, 164), WHITE, (239, 65, 53)])
-    elif key == "it":
-        vstripes(d, box, [(0, 146, 70), WHITE, (206, 43, 55)])
-    elif key == "eg":
-        hstripes(d, box, [(206, 17, 38), WHITE, (0, 0, 0)])
-        cx, cy = mid()
-        r = max(2, min(w, h) // 9)
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(255, 205, 0))
-    elif key == "ma":
-        d.rectangle([x0, y0, x1, y1], fill=(193, 39, 45))
-        cx, cy = mid()
-        # Morocco: green outlined pentagram (not a filled blob)
-        r = min(w, h) * 0.32
-        pts = []
-        for i in range(10):
-            ang = -math.pi / 2 + i * math.pi / 5
-            rad = r if i % 2 == 0 else r * 0.38
-            pts.append((cx + rad * math.cos(ang), cy + rad * math.sin(ang)))
-        d.line(pts + [pts[0]], fill=(0, 98, 51), width=max(2, min(w, h) // 12))
-    elif key == "ng":
-        vstripes(d, box, [(0, 135, 81), WHITE, (0, 135, 81)])
-    elif key == "za":
-        d.rectangle([x0, y0, x1, y1], fill=(0, 119, 73))
-        d.polygon([(x0, y0), (x0 + w // 2, (y0 + y1) // 2), (x0, y1)], fill=(0, 0, 0))
-        d.polygon([(x0, y0 + h // 6), (x0 + w // 3, (y0 + y1) // 2), (x0, y1 - h // 6)], fill=(255, 184, 28))
-        d.rectangle([x0 + w // 2, y0, x1, y0 + h // 3], fill=(222, 56, 49))
-        d.rectangle([x0 + w // 2, y1 - h // 3, x1, y1], fill=(0, 20, 137))
-    elif key == "ar":
-        hstripes(d, box, [(116, 172, 223), WHITE, (116, 172, 223)])
-        cx, cy = mid()
-        r = min(w, h) // 10
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(246, 180, 30))
-    elif key == "cl":
-        d.rectangle([x0, y0, x1, y0 + h // 2], fill=WHITE)
-        d.rectangle([x0, y0 + h // 2, x1, y1], fill=(213, 43, 30))
-        d.rectangle([x0, y0, x0 + w // 3, y0 + h // 2], fill=(0, 57, 166))
-    elif key == "br":
-        d.rectangle([x0, y0, x1, y1], fill=(0, 156, 59))
-        cx, cy = mid()
-        d.polygon(
-            [(cx, y0 + h // 6), (x1 - w // 8, cy), (cx, y1 - h // 6), (x0 + w // 8, cy)],
-            fill=(255, 223, 0),
-        )
-        r = min(w, h) // 7
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(0, 39, 118))
-    elif key == "cu":
-        hstripes(d, box, [(0, 56, 147), WHITE, (0, 56, 147), WHITE, (0, 56, 147)])
-        d.polygon([(x0, y0), (x0 + w // 2, (y0 + y1) // 2), (x0, y1)], fill=(204, 41, 54))
-    elif key == "pa":
-        d.rectangle([x0, y0, x0 + w // 2, y0 + h // 2], fill=WHITE)
-        d.rectangle([x0 + w // 2, y0, x1, y0 + h // 2], fill=(218, 41, 28))
-        d.rectangle([x0, y0 + h // 2, x0 + w // 2, y1], fill=(0, 82, 147))
-        d.rectangle([x0 + w // 2, y0 + h // 2, x1, y1], fill=WHITE)
-    elif key == "cr":
-        hstripes(d, box, [(0, 43, 127), WHITE, (206, 17, 38), WHITE, (0, 43, 127)])
-    elif key == "mx":
-        vstripes(d, box, [(0, 104, 71), WHITE, (206, 17, 38)])
-        cx, cy = mid()
-        # emblem nearly fills the white stripe (real seal is large)
-        r = max(5, int(min(w / 3 * 0.48, h * 0.38)))
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(139, 90, 43))  # brownish seal disc
-        d.ellipse(
-            [cx - r * 0.55, cy - r * 0.55, cx + r * 0.55, cy + r * 0.55],
-            fill=(206, 17, 38),
-        )
-    elif key == "us":
-        d.rectangle([x0, y0, x1, y1], fill=(178, 34, 52))
-        for i in range(7):
-            yy = y0 + h * i // 7
-            if i % 2 == 0:
-                d.rectangle([x0, yy, x1, y0 + h * (i + 1) // 7], fill=(178, 34, 52))
-            else:
-                d.rectangle([x0, yy, x1, y0 + h * (i + 1) // 7], fill=WHITE)
-        d.rectangle([x0, y0, x0 + w * 2 // 5, y0 + h * 4 // 7], fill=(60, 59, 110))
-    elif key == "ca":
-        d.rectangle([x0, y0, x1, y1], fill=WHITE)
-        d.rectangle([x0, y0, x0 + w // 4, y1], fill=(255, 0, 0))
-        d.rectangle([x1 - w // 4, y0, x1, y1], fill=(255, 0, 0))
-        cx, cy = mid()
-        d.polygon([(cx, y0 + h // 5), (cx + w // 10, cy), (cx, y1 - h // 5), (cx - w // 10, cy)], fill=(255, 0, 0))
-    elif key == "nz":
-        # Navy blue + Union Jack + Southern Cross as red 5-point stars (white outline)
-        d.rectangle([x0, y0, x1, y1], fill=(0, 36, 125))
-        jack = (x0, y0, x0 + w // 2, y0 + h // 2)
-        draw_union_jack(d, jack)
-        cross = [
-            (x0 + w * 0.72, y0 + h * 0.20, 0.11),  # top
-            (x0 + w * 0.88, y0 + h * 0.40, 0.09),  # right
-            (x0 + w * 0.70, y0 + h * 0.72, 0.10),  # bottom
-            (x0 + w * 0.56, y0 + h * 0.46, 0.08),  # left
-        ]
-        for sx, sy, rr in cross:
-            rad = min(w, h) * rr
-            draw_star(d, sx, sy, rad * 1.15, WHITE, points=5)
-            draw_star(d, sx, sy, rad, (200, 16, 46), points=5)
-    elif key == "au":
-        # Darker blue + Union Jack + large Commonwealth star + Southern Cross (white)
-        d.rectangle([x0, y0, x1, y1], fill=(0, 0, 139))
-        jack = (x0, y0, x0 + w // 2, y0 + h // 2)
-        draw_union_jack(d, jack)
-        # Commonwealth star under jack
-        cx = x0 + w * 0.25
-        cy = y0 + h * 0.72
-        draw_star(d, cx, cy, min(w, h) * 0.12, WHITE, points=7)
-        # Southern Cross white stars on fly
-        cross = [
-            (x0 + w * 0.72, y0 + h * 0.18),
-            (x0 + w * 0.88, y0 + h * 0.38),
-            (x0 + w * 0.70, y0 + h * 0.70),
-            (x0 + w * 0.58, y0 + h * 0.42),
-            (x0 + w * 0.78, y0 + h * 0.48),  # epsilon
-        ]
-        for i, (sx, sy) in enumerate(cross):
-            rr = max(1, min(w, h) // (11 if i < 4 else 16))
-            draw_star(d, sx, sy, rr, WHITE, points=5)
-    elif key == "fj":
-        # Light cyan + Union Jack + simple shield on fly
-        d.rectangle([x0, y0, x1, y1], fill=(121, 173, 236))
-        jack = (x0, y0, x0 + w // 2, y0 + h // 2)
-        draw_union_jack(d, jack)
-        sx0 = x0 + w * 0.58
-        sy0 = y0 + h * 0.35
-        sx1 = x0 + w * 0.92
-        sy1 = y0 + h * 0.88
-        d.rectangle([sx0, sy0, sx1, sy1], fill=WHITE, outline=(1, 33, 105), width=max(1, w // 40))
-        d.rectangle([sx0, sy0, sx1, sy0 + (sy1 - sy0) // 3], fill=(200, 16, 46))
-        d.ellipse(
-            [
-                (sx0 + sx1) / 2 - (sx1 - sx0) * 0.15,
-                (sy0 + sy1) / 2 - (sy1 - sy0) * 0.1,
-                (sx0 + sx1) / 2 + (sx1 - sx0) * 0.15,
-                (sy0 + sy1) / 2 + (sy1 - sy0) * 0.25,
-            ],
-            fill=(255, 205, 0),
-        )
-    else:
-        d.rectangle([x0, y0, x1, y1], fill=(200, 200, 200))
+        tile.paste(flag.convert("RGB"), (x0, y0))
+    d.rectangle([x0, y0, x1 - 1, y1 - 1], outline=(120, 120, 120), width=1)
 
 
 def make_property_tile(w, h, zh, en, color, price, flag_key, fonts):
@@ -379,7 +205,7 @@ def make_property_tile(w, h, zh, en, color, price, flag_key, fonts):
     fw = int(w * 0.68)
     fh = max(8, flag_bot - flag_top)
     fx0 = (w - fw) // 2
-    draw_flag(d, (fx0, flag_top, fx0 + fw, flag_top + fh), flag_key)
+    paste_flag(tile, (fx0, flag_top, fx0 + fw, flag_top + fh), flag_key)
 
     name_fnt = fonts["name_sm"] if max(len(zh), len(en)) >= 6 else fonts["name"]
     draw_bilingual(
@@ -416,354 +242,138 @@ def make_event_tile(w, h, zh, en, fonts):
     return tile
 
 
+
+def fit_icon(icon: Image.Image, max_w: int, max_h: int) -> Image.Image:
+    """Scale icon to fit inside max box, preserving aspect."""
+    iw, ih = icon.size
+    if iw <= 0 or ih <= 0:
+        return icon
+    scale = min(max_w / iw, max_h / ih)
+    tw = max(1, int(iw * scale))
+    th = max(1, int(ih * scale))
+    return icon.resize((tw, th), Image.Resampling.LANCZOS)
+
+
+def paste_icon(canvas: Image.Image, icon: Image.Image, box, margin: float = 0.08) -> None:
+    """Center-paste RGBA icon into box on RGB/RGBA canvas."""
+    x0, y0, x1, y1 = box
+    bw, bh = x1 - x0, y1 - y0
+    fitted = fit_icon(
+        icon,
+        max(1, int(bw * (1 - 2 * margin))),
+        max(1, int(bh * (1 - 2 * margin))),
+    )
+    px = int(x0 + (bw - fitted.width) / 2)
+    py = int(y0 + (bh - fitted.height) / 2)
+    canvas.paste(fitted, (px, py), fitted)
+
+
 def make_port_tile(w, h, zh, en, fonts):
-    """Atlantic port: ship silhouette, not purchasable, fee 400."""
-    tile = Image.new("RGB", (w, h), WHITE)
+    """Atlantic port: AI ship icon + labels + 400."""
+    scale = 2
+    W, H = w * scale, h * scale
+    tile = Image.new("RGB", (W, H), WHITE)
     d = ImageDraw.Draw(tile)
-    d.rectangle([0, 0, w - 1, h - 1], outline=LINE, width=2)
-    black = (0, 0, 0)
-    cx, cy = w / 2, h * 0.26
-    # hull
-    d.polygon(
-        [
-            (cx - w * 0.34, cy + h * 0.10),
-            (cx - w * 0.22, cy + h * 0.22),
-            (cx + w * 0.22, cy + h * 0.22),
-            (cx + w * 0.34, cy + h * 0.10),
-            (cx + w * 0.28, cy + h * 0.02),
-            (cx - w * 0.28, cy + h * 0.02),
-        ],
-        fill=black,
-    )
-    # cabin + funnel
-    d.rectangle([cx - w * 0.10, cy - h * 0.12, cx + w * 0.14, cy + h * 0.02], fill=black)
-    d.rectangle([cx + w * 0.02, cy - h * 0.22, cx + w * 0.10, cy - h * 0.12], fill=black)
-    # mast
-    d.rectangle([cx - w * 0.20, cy - h * 0.20, cx - w * 0.16, cy + h * 0.02], fill=black)
-    d.polygon(
-        [
-            (cx - w * 0.18, cy - h * 0.20),
-            (cx - w * 0.04, cy - h * 0.08),
-            (cx - w * 0.18, cy - h * 0.06),
-        ],
-        fill=black,
-    )
-    # waves
-    for i, ox in enumerate((-0.22, 0.0, 0.22)):
-        y = cy + h * 0.28
-        d.arc(
-            [cx + w * ox - w * 0.10, y - h * 0.04, cx + w * ox + w * 0.10, y + h * 0.06],
-            200,
-            340,
-            fill=black,
-            width=max(2, w // 40),
-        )
-    draw_bilingual(
+    d.rectangle([0, 0, W - 1, H - 1], outline=LINE, width=max(2, scale))
+    paste_icon(tile, ICONS["ship"], (W * 0.06, H * 0.02, W * 0.94, H * 0.36), margin=0.04)
+
+    tile = tile.resize((w, h), Image.Resampling.LANCZOS)
+    d = ImageDraw.Draw(tile)
+
+    def line_at(y, text, fnt, fill):
+        bb = d.textbbox((0, 0), text, font=fnt)
+        tw = bb[2] - bb[0]
+        d.text(((w - tw) / 2, y - bb[1]), text, font=fnt, fill=fill)
+
+    y0 = int(h * 0.38)
+    step = max(11, int(h * 0.095))
+    line_at(y0, zh, fonts["name_sm"], INK)
+    line_at(y0 + step, en, fonts["en"], INK)
+    line_at(y0 + step * 2 + 2, "大西洋", fonts["en"], (90, 90, 90))
+    line_at(y0 + step * 3 + 2, "Atlantic", fonts["en"], (90, 90, 90))
+    draw_centered(
         d,
-        (2, int(h * 0.48), w - 2, int(h * 0.68)),
-        zh,
-        en,
-        fonts["name"],
-        fonts["en"],
-        INK,
-    )
-    draw_bilingual(
-        d,
-        (2, int(h * 0.66), w - 2, int(h * 0.84)),
-        "大西洋",
-        "Atlantic",
-        fonts["en"],
-        fonts["en"],
-        (90, 90, 90),
-    )
-    draw_bilingual(
-        d,
-        (2, int(h * 0.82), w - 2, h - 1),
-        "互传 400",
-        "Transfer 400",
+        (1, int(h * 0.84), w - 1, h - 2),
+        "400",
         fonts["price"],
-        fonts["en"],
         (90, 90, 90),
     )
     return tile
 
 
-def draw_corner_icon(d, box, kind):
-    """Black silhouette icons for the four corners."""
-    x0, y0, x1, y1 = box
-    w, h = x1 - x0, y1 - y0
-    cx, cy = (x0 + x1) / 2, y0 + h * 0.38
-    black = (0, 0, 0)
-    if kind == "start":
-        # bank / classical facade
-        base = cy + h * 0.18
-        d.rectangle([cx - w * 0.28, base, cx + w * 0.28, base + h * 0.06], fill=black)
-        for i in range(4):
-            px = cx - w * 0.22 + i * w * 0.14
-            d.rectangle([px, cy - h * 0.02, px + w * 0.05, base], fill=black)
-        d.polygon(
-            [
-                (cx - w * 0.30, cy - h * 0.02),
-                (cx, cy - h * 0.20),
-                (cx + w * 0.30, cy - h * 0.02),
-            ],
-            fill=black,
-        )
-        d.rectangle([cx - w * 0.06, cy + h * 0.04, cx + w * 0.06, base], fill=black)
-    elif kind == "airport":
-        # airplane top view
-        d.polygon(
-            [
-                (cx, cy - h * 0.22),
-                (cx + w * 0.06, cy - h * 0.02),
-                (cx + w * 0.32, cy + h * 0.02),
-                (cx + w * 0.32, cy + h * 0.08),
-                (cx + w * 0.06, cy + h * 0.06),
-                (cx + w * 0.05, cy + h * 0.18),
-                (cx + w * 0.12, cy + h * 0.22),
-                (cx, cy + h * 0.18),
-                (cx - w * 0.12, cy + h * 0.22),
-                (cx - w * 0.05, cy + h * 0.18),
-                (cx - w * 0.06, cy + h * 0.06),
-                (cx - w * 0.32, cy + h * 0.08),
-                (cx - w * 0.32, cy + h * 0.02),
-                (cx - w * 0.06, cy - h * 0.02),
-            ],
-            fill=black,
-        )
-    elif kind == "hospital":
-        # hospital building + medical cross
-        d.rectangle(
-            [cx - w * 0.28, cy - h * 0.08, cx + w * 0.28, cy + h * 0.26],
-            fill=black,
-        )
-        d.polygon(
-            [
-                (cx - w * 0.32, cy - h * 0.08),
-                (cx, cy - h * 0.26),
-                (cx + w * 0.32, cy - h * 0.08),
-            ],
-            fill=black,
-        )
-        # white cross on facade
-        d.rectangle(
-            [cx - w * 0.05, cy - h * 0.02, cx + w * 0.05, cy + h * 0.18],
-            fill=WHITE,
-        )
-        d.rectangle(
-            [cx - w * 0.14, cy + h * 0.04, cx + w * 0.14, cy + h * 0.12],
-            fill=WHITE,
-        )
-        d.rectangle(
-            [cx - w * 0.06, cy + h * 0.18, cx + w * 0.06, cy + h * 0.26],
-            fill=WHITE,
-        )
-    else:  # casino — playing cards
-        # back card
-        d.polygon(
-            [
-                (cx - w * 0.02, cy - h * 0.16),
-                (cx + w * 0.24, cy - h * 0.08),
-                (cx + w * 0.18, cy + h * 0.20),
-                (cx - w * 0.08, cy + h * 0.12),
-            ],
-            fill=black,
-        )
-        # front card
-        d.rectangle([cx - w * 0.22, cy - h * 0.14, cx + w * 0.10, cy + h * 0.18], fill=WHITE, outline=black, width=max(2, w // 40))
-        d.rectangle([cx - w * 0.20, cy - h * 0.12, cx + w * 0.08, cy + h * 0.16], fill=black)
-        # pip
-        d.ellipse([cx - w * 0.08, cy - h * 0.02, cx + w * 0.0, cy + h * 0.08], fill=WHITE)
+def draw_corner_icon(d, box, kind, canvas=None):
+    """Corner tile icons from AI assets (bank / airport / hospital / exchange)."""
+    if canvas is None:
+        return
+    key = {
+        "start": "bank",
+        "airport": "airport",
+        "hospital": "hospital",
+        "exchange": "exchange",
+    }.get(kind, "exchange")
+    # Exchange: slightly inset after tight crop
+    margin = 0.07 if kind in ("exchange", "casino") else 0.10
+    paste_icon(canvas, ICONS[key], box, margin=margin)
 
 
 def make_facility_tile(w, h, zh, en, key, fonts):
-    """Oil / mine: white card, black silhouette, name + price."""
-    tile = Image.new("RGB", (w, h), WHITE)
+    """Oil / mine: white card, AI silhouette, name + price."""
+    scale = 2
+    W, H = w * scale, h * scale
+    tile = Image.new("RGB", (W, H), WHITE)
     d = ImageDraw.Draw(tile)
-    d.rectangle([0, 0, w - 1, h - 1], outline=LINE, width=2)
-    black = (0, 0, 0)
-    # icon box (upper area)
-    ix0, iy0 = w * 0.14, h * 0.04
-    ix1, iy1 = w * 0.86, h * 0.50
-    iw, ih = ix1 - ix0, iy1 - iy0
-    cx = (ix0 + ix1) / 2
+    d.rectangle([0, 0, W - 1, H - 1], outline=LINE, width=max(2, scale))
+    icon_key = "oil" if key == "oil" else "mine"
+    paste_icon(tile, ICONS[icon_key], (W * 0.06, H * 0.02, W * 0.94, H * 0.52), margin=0.05)
 
-    if key == "oil":
-        # classic oil derrick (井架) silhouette
-        top = iy0 + ih * 0.02
-        mid = iy0 + ih * 0.55
-        base = iy0 + ih * 0.82
-        ground = iy0 + ih * 0.92
-        # A-frame legs
-        d.polygon(
-            [
-                (cx - iw * 0.04, top),
-                (cx + iw * 0.04, top),
-                (cx + iw * 0.28, base),
-                (cx + iw * 0.18, base),
-                (cx + iw * 0.02, top + ih * 0.12),
-                (cx - iw * 0.02, top + ih * 0.12),
-                (cx - iw * 0.18, base),
-                (cx - iw * 0.28, base),
-            ],
-            fill=black,
-        )
-        # cross beams
-        for t in (0.28, 0.45, 0.62):
-            y = iy0 + ih * t
-            half = iw * (0.06 + 0.18 * ((y - top) / max(1, base - top)))
-            d.rectangle([cx - half, y - ih * 0.025, cx + half, y + ih * 0.025], fill=black)
-        # crown block
-        d.rectangle([cx - iw * 0.07, top, cx + iw * 0.07, top + ih * 0.08], fill=black)
-        # drill stem
-        d.rectangle([cx - iw * 0.035, mid, cx + iw * 0.035, ground], fill=black)
-        # platform
-        d.rectangle([cx - iw * 0.36, base - ih * 0.02, cx + iw * 0.36, base + ih * 0.08], fill=black)
-        # ground pad
-        d.rectangle([cx - iw * 0.42, ground - ih * 0.02, cx + iw * 0.42, ground + ih * 0.06], fill=black)
-    else:
-        # mountain + pickaxe striking it
-        ground = iy0 + ih * 0.90
-        # mountain mass
-        d.polygon(
-            [
-                (ix0 + iw * 0.02, ground),
-                (ix0 + iw * 0.22, iy0 + ih * 0.38),
-                (ix0 + iw * 0.38, iy0 + ih * 0.52),
-                (ix0 + iw * 0.52, iy0 + ih * 0.22),
-                (ix0 + iw * 0.72, iy0 + ih * 0.48),
-                (ix0 + iw * 0.88, ground),
-            ],
-            fill=black,
-        )
-        # pickaxe: handle from upper-right into mountain face
-        # handle
-        hx0, hy0 = ix0 + iw * 0.78, iy0 + ih * 0.08
-        hx1, hy1 = ix0 + iw * 0.42, iy0 + ih * 0.48
-        # thick handle as polygon along the shaft
-        ang = math.atan2(hy1 - hy0, hx1 - hx0)
-        nx, ny = -math.sin(ang) * iw * 0.035, math.cos(ang) * iw * 0.035
-        d.polygon(
-            [
-                (hx0 + nx, hy0 + ny),
-                (hx0 - nx, hy0 - ny),
-                (hx1 - nx, hy1 - ny),
-                (hx1 + nx, hy1 + ny),
-            ],
-            fill=black,
-        )
-        # pick head (锄头) at contact point
-        px, py = hx1, hy1
-        d.polygon(
-            [
-                (px - iw * 0.02, py - ih * 0.02),
-                (px + iw * 0.16, py - ih * 0.18),
-                (px + iw * 0.20, py - ih * 0.10),
-                (px + iw * 0.04, py + ih * 0.04),
-                (px - iw * 0.14, py + ih * 0.16),
-                (px - iw * 0.18, py + ih * 0.08),
-            ],
-            fill=black,
-        )
-
+    tile = tile.resize((w, h), Image.Resampling.LANCZOS)
+    d = ImageDraw.Draw(tile)
+    name_zh = fonts["name_sm"] if len(zh) >= 4 else fonts["name"]
     draw_bilingual(
         d,
         (2, int(h * 0.52), w - 2, int(h * 0.78)),
         zh,
         en,
-        fonts["name"],
+        name_zh,
         fonts["en"],
         INK,
+        gap=0,
     )
     draw_centered(d, (2, int(h * 0.78), w - 2, h - 2), "1000", fonts["price"], (90, 90, 90))
     return tile
 
 
-def make_mafia_tile(w, h, zh, en, fonts):
-    """White card: classic mafia black silhouette + bilingual name."""
+def make_mafia_tile(w, h, zh, en, fonts, icon="cards"):
+    """White card: poker cards (Monte Carlo) or chips (Las Vegas) + bilingual name."""
     tile = Image.new("RGB", (w, h), WHITE)
     d = ImageDraw.Draw(tile)
     d.rectangle([0, 0, w - 1, h - 1], outline=LINE, width=2)
+    key = "chips" if icon == "chips" else "cards"
+    # Cards need a larger footprint; chips keep a bit more padding
+    if key == "cards":
+        paste_icon(tile, ICONS[key], (w * 0.06, h * 0.02, w * 0.94, h * 0.58), margin=0.06)
+        text_top = int(h * 0.58)
+    else:
+        paste_icon(tile, ICONS[key], (w * 0.08, h * 0.02, w * 0.92, h * 0.56), margin=0.04)
+        text_top = int(h * 0.56)
 
-    # silhouette region (upper ~58%)
-    sx0, sy0 = int(w * 0.18), int(h * 0.04)
-    sx1, sy1 = int(w * 0.82), int(h * 0.56)
-    sw, sh = sx1 - sx0, sy1 - sy0
-    cx = (sx0 + sx1) / 2
-    black = (0, 0, 0)
-
-    # fedora brim
-    brim_y = sy0 + sh * 0.22
-    d.ellipse(
-        [cx - sw * 0.42, brim_y - sh * 0.04, cx + sw * 0.42, brim_y + sh * 0.08],
-        fill=black,
-    )
-    # fedora crown
-    d.ellipse(
-        [cx - sw * 0.28, sy0 + sh * 0.02, cx + sw * 0.28, brim_y + sh * 0.02],
-        fill=black,
-    )
-    d.rectangle(
-        [cx - sw * 0.26, sy0 + sh * 0.10, cx + sw * 0.26, brim_y],
-        fill=black,
-    )
-    # head
-    head_top = brim_y + sh * 0.02
-    head_bot = sy0 + sh * 0.48
-    d.ellipse(
-        [cx - sw * 0.20, head_top, cx + sw * 0.20, head_bot],
-        fill=black,
-    )
-    # coat / shoulders
-    coat_top = sy0 + sh * 0.42
-    d.polygon(
-        [
-            (cx - sw * 0.48, sy1),
-            (cx - sw * 0.38, coat_top),
-            (cx - sw * 0.12, coat_top + sh * 0.06),
-            (cx, coat_top + sh * 0.02),
-            (cx + sw * 0.12, coat_top + sh * 0.06),
-            (cx + sw * 0.38, coat_top),
-            (cx + sw * 0.48, sy1),
-        ],
-        fill=black,
-    )
-    # lapel notch (white cut so coat reads as suit)
-    d.polygon(
-        [
-            (cx - sw * 0.02, coat_top + sh * 0.04),
-            (cx - sw * 0.14, sy1),
-            (cx + sw * 0.14, sy1),
-            (cx + sw * 0.02, coat_top + sh * 0.04),
-        ],
-        fill=WHITE,
-    )
-    # restore center torso strip
-    d.polygon(
-        [
-            (cx - sw * 0.06, coat_top + sh * 0.08),
-            (cx - sw * 0.08, sy1),
-            (cx + sw * 0.08, sy1),
-            (cx + sw * 0.06, coat_top + sh * 0.08),
-        ],
-        fill=black,
-    )
-
+    name_zh = fonts["name_sm"] if len(zh) >= 5 else fonts["name"]
     draw_bilingual(
         d,
-        (2, int(h * 0.58), w - 2, h - 2),
+        (2, text_top, w - 2, h - 2),
         zh,
         en,
-        fonts["name"],
+        name_zh,
         fonts["en"],
         INK,
+        gap=0,
     )
     return tile
 
 
 def main():
     board_size = 1400
-    legend_band = 56
+    legend_band = 84
     margin = 40
     img = Image.new("RGB", (board_size, board_size + legend_band), WOOD)
     draw = ImageDraw.Draw(img)
@@ -784,7 +394,8 @@ def main():
         "event": font(40),
         "corner": font(16),
         "corner_en": font(11),
-        "legend": font(16),
+        "legend": font(18),
+        "legend_en": font(14),
         "small": font(12),
     }
 
@@ -795,16 +406,34 @@ def main():
         y1 = int(inner + (row + 1) * cell)
         return x0, y0, x1, y1
 
-    def paste(col, row, tile_img):
+    def tile_box(col, row):
+        """Inset content so neighboring tiles are separated by a visible gap."""
         x0, y0, x1, y1 = cell_box(col, row)
-        img.paste(tile_img.resize((x1 - x0, y1 - y0), Image.Resampling.LANCZOS), (x0, y0))
+        g = TILE_GAP
+        return x0 + g, y0 + g, x1 - g, y1 - g
+
+    def stroke_tile(x0, y0, x1, y1):
+        draw.rectangle(
+            [x0, y0, x1 - 1, y1 - 1],
+            outline=TILE_EDGE,
+            width=TILE_EDGE_W,
+        )
+
+    def paste(col, row, tile_img):
+        x0, y0, x1, y1 = tile_box(col, row)
+        img.paste(
+            tile_img.resize((x1 - x0, y1 - y0), Image.Resampling.LANCZOS),
+            (x0, y0),
+        )
+        stroke_tile(x0, y0, x1, y1)
 
     def paste_corner(col, row, zh, en, kind, start=False):
-        x0, y0, x1, y1 = cell_box(col, row)
+        x0, y0, x1, y1 = tile_box(col, row)
         fill = START_BG if start else WHITE
-        draw.rectangle([x0, y0, x1, y1], fill=fill, outline=LINE, width=2)
-        icon_bot = y0 + (y1 - y0) * 0.52
-        draw_corner_icon(draw, (x0, y0, x1, icon_bot), kind)
+        draw.rectangle([x0, y0, x1, y1], fill=fill)
+        stroke_tile(x0, y0, x1, y1)
+        icon_bot = y0 + (y1 - y0) * (0.56 if kind in ("exchange", "casino") else 0.52)
+        draw_corner_icon(draw, (x0, y0, x1, icon_bot), kind, canvas=img)
         label_fill = (74, 47, 0) if start else INK
         if start:
             draw_bilingual(
@@ -835,13 +464,13 @@ def main():
             )
 
     def paste_side_tile(col, row, tile):
-        x0, y0, x1, y1 = cell_box(col, row)
+        x0, y0, x1, y1 = tile_box(col, row)
         w, h = x1 - x0, y1 - y0
         kind, zh, en, color, price, flag_key = tile
         if kind == "event":
             paste(col, row, make_event_tile(w, h, zh, en, fonts))
         elif kind == "mafia":
-            paste(col, row, make_mafia_tile(w, h, zh, en, fonts))
+            paste(col, row, make_mafia_tile(w, h, zh, en, fonts, flag_key or "cards"))
         elif kind == "facility":
             paste(col, row, make_facility_tile(w, h, zh, en, flag_key, fonts))
         elif kind == "port":
@@ -849,11 +478,11 @@ def main():
         else:
             paste(col, row, make_property_tile(w, h, zh, en, color, price, flag_key, fonts))
 
-    # 角格：银行（起点）左下，顺时针 机场→医院→赌场
+    # 角格：银行（起点）左下，顺时针 机场→医院→证券交易所
     paste_corner(0, 11, "银行（起点）", "Bank (GO)", "start", start=True)
     paste_corner(0, 0, "机场", "Airport", "airport")
     paste_corner(11, 0, "医院", "Hospital", "hospital")
-    paste_corner(11, 11, "赌场", "Casino", "casino")
+    paste_corner(11, 11, "证券交易所", "Stock Exch.", "casino")
 
     for i, tile in enumerate(LEFT):
         paste_side_tile(0, 10 - i, tile)
@@ -880,8 +509,8 @@ def main():
     n_cells = 2 * n_st + n_right + n_left  # 21
     assert n_cells == 21
 
-    # Upper plaza reserved for HUD; track sits in the lower band
-    hud_band_h = ch * 0.38
+    # Upper plaza reserved for HUD; track sits lower so it clears the HUD
+    hud_band_h = ch * 0.47
     track_top = cy0 + hud_band_h
     track_bot = cy1 - 8
     track_h = track_bot - track_top
@@ -907,120 +536,7 @@ def main():
     cx_r = ox0 + r_out + straight
     cy = oy0 + r_out
 
-    # --- Filled HUD mock (upper center plaza) ---
-    hud = (cx0 + 12, cy0 + 10, cx1 - 12, track_top - 8)
-    hx0, hy0, hx1, hy1 = hud
-    hw, hh = hx1 - hx0, hy1 - hy0
-    draw.rounded_rectangle(
-        [hx0, hy0, hx1, hy1],
-        radius=10,
-        fill=(252, 250, 245),
-        outline=(150, 165, 180),
-        width=2,
-    )
-
-    def hud_text(xy, text, fnt, fill=(40, 50, 60), anchor="lt"):
-        draw.text(xy, text, font=fnt, fill=fill)
-
-    f_title = font(13, prefer=[str(FONTS_DIR / "NotoSansSC-Bold.otf")])
-    f_en = fonts["en"]
-    f_tiny = font(10, prefer=[str(FONTS_DIR / "NotoSansSC-Regular.otf")])
-    f_num = font(18, prefer=[str(FONTS_DIR / "Cinzel-Bold.ttf")])
-    f_btn = font(12, prefer=[str(FONTS_DIR / "NotoSansSC-Bold.otf")])
-
-    # Title strip
-    hud_text((hx0 + 12, hy0 + 6), "花花世界  Vivondo", f_title, (55, 70, 90))
-    hud_text((hx1 - 200, hy0 + 8), "回合 Turn 3 · 蓝方 Blue", f_en, (90, 110, 130))
-
-    # Player cards row
-    players = [
-        ((40, 110, 200), "蓝 Blue", "¥4820", "机 船 免", True),
-        ((200, 55, 55), "红 Red", "¥3150", "机", False),
-        ((40, 140, 70), "绿 Green", "¥2680", "免", False),
-        ((210, 170, 40), "黄 Yellow", "¥5010", "船", False),
-    ]
-    pc_y0 = hy0 + 28
-    pc_h = max(44, int(hh * 0.28))
-    pc_gap = 8
-    pc_w = (hw - 20 - pc_gap * 3) / 4
-    for i, (col, name, cash, toks, active) in enumerate(players):
-        x0 = hx0 + 10 + i * (pc_w + pc_gap)
-        x1 = x0 + pc_w
-        y1 = pc_y0 + pc_h
-        bg = (236, 244, 252) if active else (245, 245, 242)
-        outline = col if active else (190, 195, 200)
-        draw.rounded_rectangle([x0, pc_y0, x1, y1], radius=6, fill=bg, outline=outline, width=2 if active else 1)
-        draw.ellipse([x0 + 6, pc_y0 + 8, x0 + 18, pc_y0 + 20], fill=col)
-        hud_text((x0 + 24, pc_y0 + 6), name, f_en, (40, 50, 60))
-        hud_text((x0 + 8, pc_y0 + 22), cash, f_btn, (30, 90, 50))
-        hud_text((x0 + 8, pc_y0 + 36), toks, f_tiny, (80, 90, 100))
-        if active:
-            hud_text((x1 - 36, pc_y0 + 6), "行动", f_tiny, col)
-
-    # Mid row: turn / dice / pot
-    mid_y0 = pc_y0 + pc_h + 8
-    mid_h = max(52, int(hh * 0.30))
-    mid_y1 = mid_y0 + mid_h
-    # Turn panel
-    t0, t1 = hx0 + 10, hx0 + 10 + hw * 0.34
-    draw.rounded_rectangle([t0, mid_y0, t1, mid_y1], radius=6, fill=(255, 255, 255), outline=(175, 185, 195), width=1)
-    hud_text((t0 + 10, mid_y0 + 6), "阶段 Phase", f_tiny, (110, 120, 130))
-    hud_text((t0 + 10, mid_y0 + 20), "⑤ 经营窗口", f_btn, (40, 55, 75))
-    hud_text((t0 + 10, mid_y0 + 36), "Build / Specialize", f_tiny, (100, 110, 120))
-    # Dice panel
-    d0, d1 = t1 + 8, t1 + 8 + hw * 0.22
-    draw.rounded_rectangle([d0, mid_y0, d1, mid_y1], radius=6, fill=(255, 255, 255), outline=(175, 185, 195), width=1)
-    hud_text((d0 + 10, mid_y0 + 4), "骰子 Dice", f_tiny, (110, 120, 130))
-    # die face
-    die = 22
-    dx = (d0 + d1) / 2 - die / 2
-    dy = mid_y0 + 20
-    draw.rounded_rectangle([dx, dy, dx + die, dy + die], radius=4, fill=(250, 250, 250), outline=(40, 40, 40), width=2)
-    # pips for 5
-    pip = 2.2
-    for px, py in (
-        (dx + 6, dy + 6),
-        (dx + die - 6, dy + 6),
-        (dx + die / 2, dy + die / 2),
-        (dx + 6, dy + die - 6),
-        (dx + die - 6, dy + die - 6),
-    ):
-        draw.ellipse([px - pip, py - pip, px + pip, py + pip], fill=(30, 30, 30))
-    # Pot panel
-    p0, p1 = d1 + 8, hx1 - 10
-    draw.rounded_rectangle([p0, mid_y0, p1, mid_y1], radius=6, fill=(255, 248, 235), outline=(210, 170, 100), width=1)
-    hud_text((p0 + 12, mid_y0 + 6), "赌场奖池 Casino Pot", f_tiny, (140, 100, 40))
-    hud_text((p0 + 12, mid_y0 + 22), "¥ 800", f_num, (160, 90, 20))
-    hud_text((p0 + 100, mid_y0 + 28), "GM 托管 · Auto bank", f_tiny, (130, 110, 80))
-
-    # Action buttons
-    btn_y0 = mid_y1 + 8
-    btn_y1 = hy1 - 8
-    btns = [
-        ("掷骰", "Roll", (40, 110, 200), True),
-        ("买地", "Buy", (40, 140, 90), True),
-        ("加盖", "Build", (90, 90, 140), True),
-        ("机场", "Fly", (70, 120, 160), False),
-        ("港口", "Port", (70, 120, 160), False),
-        ("结束", "End", (140, 80, 80), True),
-    ]
-    bgap = 6
-    bw = (hw - 20 - bgap * (len(btns) - 1)) / len(btns)
-    for i, (zh, en, col, on) in enumerate(btns):
-        x0 = hx0 + 10 + i * (bw + bgap)
-        x1 = x0 + bw
-        fill = col if on else (200, 205, 210)
-        draw.rounded_rectangle([x0, btn_y0, x1, btn_y1], radius=6, fill=fill, outline=(50, 50, 50), width=1)
-        # bilingual centered roughly
-        draw_bilingual(
-            draw,
-            (x0, btn_y0, x1, btn_y1),
-            zh,
-            en,
-            f_btn,
-            f_tiny,
-            (255, 255, 255) if on else (90, 90, 90),
-        )
+    # Upper plaza stays plain CENTER_BG — live React HUD overlays it (no baked mock).
 
     boundaries = []
     for i in range(n_st):
@@ -1115,105 +631,23 @@ def main():
     def draw_track_icon(kind, mx, my, ink, scale):
         s = scale
         if kind == "start":
-            # checkered cell alone marks start/finish — no text
             return
-        elif kind == "cash":
-            # banknote + coin
-            draw.rectangle(
-                [mx - s * 0.72, my - s * 0.38, mx + s * 0.72, my + s * 0.38],
-                outline=ink,
-                width=max(2, int(s * 0.12)),
-            )
-            draw.ellipse(
-                [mx - s * 0.26, my - s * 0.26, mx + s * 0.26, my + s * 0.26],
-                outline=ink,
-                width=max(2, int(s * 0.10)),
-            )
-            draw.rectangle(
-                [mx - s * 0.10, my - s * 0.18, mx + s * 0.10, my + s * 0.18],
-                fill=ink,
-            )
+        dark_cell = ink in ((255, 255, 255), WHITE)
+        if kind == "cash":
+            icon = ICONS["cash-dark" if dark_cell else "cash"]
+            # Wide banknote — width-based, mid size (between prior too-big / too-small)
+            tw = max(18, int(s * 1.42))
+            th = max(12, int(tw * icon.height / icon.width))
         elif kind == "foot":
-            # clearer shoe-print: elongated sole + heel + 5 toes
-            sole = [
-                (mx - s * 0.18, my + s * 0.48),
-                (mx + s * 0.22, my + s * 0.48),
-                (mx + s * 0.32, my + s * 0.10),
-                (mx + s * 0.28, my - s * 0.18),
-                (mx + s * 0.05, my - s * 0.28),
-                (mx - s * 0.22, my - s * 0.18),
-                (mx - s * 0.30, my + s * 0.08),
-            ]
-            draw.polygon(sole, fill=ink)
-            draw.ellipse(
-                [mx - s * 0.20, my + s * 0.28, mx + s * 0.24, my + s * 0.62],
-                fill=ink,
-            )
-            toes = [
-                (-0.30, -0.42, 0.11),
-                (-0.12, -0.52, 0.12),
-                (0.08, -0.54, 0.11),
-                (0.26, -0.46, 0.10),
-                (0.40, -0.32, 0.09),
-            ]
-            for ox, oy, rr in toes:
-                draw.ellipse(
-                    [
-                        mx + s * (ox - rr),
-                        my + s * (oy - rr),
-                        mx + s * (ox + rr),
-                        my + s * (oy + rr),
-                    ],
-                    fill=ink,
-                )
+            icon = ICONS["horse-head-dark" if dark_cell else "horse-head"]
+            th = max(22, int(s * 1.55))
+            tw = max(14, int(th * icon.width / icon.height))
         else:
-            # clearer side-view semi-auto pistol
-            # barrel + slide
-            draw.rounded_rectangle(
-                [mx - s * 0.10, my - s * 0.30, mx + s * 0.78, my - s * 0.02],
-                radius=max(1, int(s * 0.06)),
-                fill=ink,
-            )
-            # rear sight bump
-            draw.rectangle(
-                [mx - s * 0.02, my - s * 0.38, mx + s * 0.12, my - s * 0.28],
-                fill=ink,
-            )
-            # front sight
-            draw.rectangle(
-                [mx + s * 0.62, my - s * 0.38, mx + s * 0.72, my - s * 0.28],
-                fill=ink,
-            )
-            # frame under slide
-            draw.rectangle(
-                [mx - s * 0.28, my - s * 0.08, mx + s * 0.20, my + s * 0.12],
-                fill=ink,
-            )
-            # trigger
-            draw.ellipse(
-                [mx - s * 0.08, my + s * 0.02, mx + s * 0.10, my + s * 0.28],
-                outline=ink,
-                width=max(2, int(s * 0.10)),
-            )
-            draw.rectangle(
-                [mx - s * 0.02, my + s * 0.08, mx + s * 0.06, my + s * 0.22],
-                fill=ink,
-            )
-            # grip
-            draw.polygon(
-                [
-                    (mx - s * 0.28, my + s * 0.08),
-                    (mx - s * 0.02, my + s * 0.08),
-                    (mx - s * 0.12, my + s * 0.62),
-                    (mx - s * 0.42, my + s * 0.58),
-                ],
-                fill=ink,
-            )
-            # magazine base
-            draw.rectangle(
-                [mx - s * 0.38, my + s * 0.52, mx - s * 0.10, my + s * 0.66],
-                fill=ink,
-            )
+            icon = ICONS["slot-dark" if dark_cell else "slot"]
+            th = max(22, int(s * 1.55))
+            tw = max(14, int(th * icon.width / icon.height))
+        icon = icon.resize((tw, th), Image.Resampling.LANCZOS)
+        img.paste(icon, (int(mx - tw / 2), int(my - th / 2)), icon)
 
     for i, (seg, u0, u1) in enumerate(boundaries):
         poly = cell_poly(seg, u0, u1)
@@ -1270,17 +704,25 @@ def main():
         (OCEANIA, "大洋洲", "Oceania"),
         (EVENT_FG, "事件", "Event"),
     ]
-    ly = size + 10
-    lx = 36
+    ly = size + 14
+    lx = 28
+    sw = 26
     for i, (col, zh, en) in enumerate(legend):
-        x = lx + i * 168
+        x = lx + i * 172
         if zh == "事件":
-            draw.rectangle([x, ly + 4, x + 14, ly + 14], fill=WHITE, outline=LINE)
-            draw.text((x + 3, ly), "?", font=fonts["small"], fill=EVENT_FG)
+            draw.rectangle([x, ly + 6, x + sw, ly + 6 + sw], fill=WHITE, outline=LINE, width=2)
+            qf = font(20, prefer=[str(FONTS_DIR / "NotoSansSC-Bold.otf")])
+            qb = draw.textbbox((0, 0), "?", font=qf)
+            draw.text(
+                (x + (sw - (qb[2] - qb[0])) / 2, ly + 6 + (sw - (qb[3] - qb[1])) / 2 - qb[1]),
+                "?",
+                font=qf,
+                fill=EVENT_FG,
+            )
         else:
-            draw.rectangle([x, ly + 4, x + 14, ly + 14], fill=col, outline=LINE)
-        draw.text((x + 20, ly), zh, font=fonts["small"], fill=INK)
-        draw.text((x + 20, ly + 14), en, font=fonts["en"], fill=(90, 90, 90))
+            draw.rectangle([x, ly + 6, x + sw, ly + 6 + sw], fill=col, outline=LINE, width=2)
+        draw.text((x + sw + 10, ly + 2), zh, font=fonts["legend"], fill=INK)
+        draw.text((x + sw + 10, ly + 28), en, font=fonts["legend_en"], fill=(90, 90, 90))
 
     props = sum(1 for t in BOTTOM + LEFT + TOP + RIGHT if t[0] == "property")
     events = sum(1 for t in BOTTOM + LEFT + TOP + RIGHT if t[0] == "event")

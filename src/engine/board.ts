@@ -41,7 +41,7 @@ const TOP: SideSpec[] = [
   ["port", "港口", "Port", 400],
   ["property", "法国", "France", 560, 70, "europe"],
   ["property", "意大利", "Italy", 440, 55, "europe"],
-  ["mafia", "黑手党", "Mafia"],
+  ["mafia", "蒙特卡洛赌城", "Monte Carlo"],
   ["event", "事件", "Event"],
   ["property", "埃及", "Egypt", 240, 30, "africa"],
   ["property", "摩洛哥", "Morocco", 210, 25, "africa"],
@@ -67,7 +67,7 @@ const BOTTOM: SideSpec[] = [
   ["port", "港口", "Port", 400],
   ["property", "加拿大", "Canada", 520, 65, "na"],
   ["property", "美国", "USA", 600, 75, "na"],
-  ["mafia", "黑手党", "Mafia"],
+  ["mafia", "拉斯维加斯赌城", "Las Vegas"],
   ["event", "事件", "Event"],
   ["property", "新西兰", "New Zealand", 400, 50, "oceania"],
   ["property", "澳大利亚", "Australia", 510, 65, "oceania"],
@@ -132,8 +132,8 @@ export function buildBoardTiles(): BoardTile[] {
   tiles.push({
     index: i++,
     kind: "corner",
-    zh: "赌场",
-    en: "Casino",
+    zh: "证券交易所",
+    en: "Stock Exchange",
     col: 11,
     row: 11,
   });
@@ -150,10 +150,10 @@ export function buildBoardTiles(): BoardTile[] {
 
 export const BOARD_TILE_COUNT = 44;
 
-/** Board PNG is 1400×1456 (square board + legend). Playable grid is 1400×1400. */
+/** Board PNG is 1400×1484 (square board + legend). Playable grid is 1400×1400. */
 export const BOARD_PNG = {
   width: 1400,
-  height: 1456,
+  height: 1484,
   playSize: 1400,
   margin: 44,
   cell: (1400 - 88) / 12,
@@ -166,5 +166,27 @@ export function tileCenterPercent(tile: BoardTile): { x: number; y: number } {
   return {
     x: (cx / playSize) * 100,
     y: (cy / playSize) * 100,
+  };
+}
+
+/** Continent color bar at bottom of a property tile (% of play area). Matches render_board_v7. */
+export function tileContinentBarPercent(tile: BoardTile): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+} {
+  const { margin, cell, playSize } = BOARD_PNG;
+  const gap = 3; // TILE_GAP in render_board_v7.py
+  const x0 = margin + tile.col * cell + gap;
+  const y0 = margin + tile.row * cell + gap;
+  const tw = cell - gap * 2;
+  const th = cell - gap * 2;
+  const barH = Math.max(14, Math.floor(th * 0.2));
+  return {
+    left: ((x0 + 1) / playSize) * 100,
+    top: ((y0 + th - barH) / playSize) * 100,
+    width: ((tw - 2) / playSize) * 100,
+    height: (barH / playSize) * 100,
   };
 }

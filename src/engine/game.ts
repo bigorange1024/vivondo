@@ -40,7 +40,25 @@ import {
 } from "./deck";
 
 export type PlayerKind = "human" | "ai";
-export type TurnPhase = "roll" | "settle" | "end";
+export type TurnPhase = "initiative" | "roll" | "settle" | "end";
+
+/** Opening turn-order by interactive two dice (R-004). */
+export interface InitiativeState {
+  /** Players who still need an initial sum (front = next). */
+  pending: string[];
+  /** Already placed, high initial first; same-initial pairs are playoff-ordered. */
+  placed: { id: string; initial: number }[];
+  /** Pairwise playoff when current initial ties someone already placed. */
+  playoff: null | {
+    ids: [string, string];
+    nextId: string;
+    round: Partial<Record<string, number>>;
+    /** Original tied total — playoff cannot leap other bands. */
+    band: number;
+  };
+  /** First die of the current two-die roll; null = need first click. */
+  partialDie: number | null;
+}
 
 export type SettlePrompt =
   | { kind: "idle" }
@@ -49,7 +67,7 @@ export type SettlePrompt =
       kind: "upgrade";
       tileIndex: number;
       cost: number;
-      mode: "house" | "specialize";
+      mode: "house" | "specialize" | "respecialize";
     }
   | { kind: "airport" }
   | { kind: "airportDest"; free: boolean }
@@ -67,13 +85,23 @@ export type SettlePrompt =
   | { kind: "racetrackGunBuild" }
   | { kind: "racetrackGunDemolish" }
   | { kind: "racetrackExit" }
-  | { kind: "swap" };
+  | { kind: "swap" }
+  /** Racetrack money/foot/gun: roll two dice one at a time (D = 1st − 2nd). */
+  | { kind: "trackJudge"; first: number | null; pos: number; depth: number }
+  /** Stock exchange: roll two dice one at a time after entry fee. */
+  | { kind: "casinoRoll"; first: number | null };
 
 export interface PendingDebt {
   amount: number;
   payeeId: string | null;
   reason: string;
   debtorId: string;
+}
+
+/** Bankrupt player's remaining country tiles to auction (R-017). */
+export interface PendingEstate {
+  bankruptId: string;
+  queue: number[];
 }
 
 export interface PlayerState {
@@ -89,7 +117,7 @@ export interface PlayerState {
   hasShip: boolean;
   hasRentFree: boolean;
   hasDischarge: boolean;
-  hasMafiaDeed: boolean;
+  hasVipCard: boolean;
   /** null = on main ring; 0..20 on racetrack. */
   racetrackPos: number | null;
   /** After leaving track onto a mafia tile, skip re-entry once. */
@@ -113,6 +141,7 @@ export interface GameState {
   currentPlayerIndex: number;
   phase: TurnPhase;
   prompt: SettlePrompt;
+  initiative: InitiativeState | null;
   lastDice: number | null;
   lastCasinoDice: [number, number] | null;
   /** Last racetrack effect dice pair (for D). */
@@ -122,6 +151,7 @@ export interface GameState {
   lastEvent: EventCardId | null;
   auction: AuctionState | null;
   pendingDebt: PendingDebt | null;
+  pendingEstate: PendingEstate | null;
   turn: number;
   log: string[];
   winnerId: string | null;
@@ -150,7 +180,7 @@ function blankPlayer(
     hasShip: false,
     hasRentFree: false,
     hasDischarge: false,
-    hasMafiaDeed: false,
+    hasVipCard: false,
     racetrackPos: null,
     skipNextMafiaEnter: false,
   };
@@ -183,13 +213,22 @@ export function createInitialState(config: GameConfig): GameState {
   }
 
   const tiles = buildBoardTiles();
+  const pending = players.map((p) => p.id);
+  const firstIdx = 0;
+
   return {
     tiles,
     deeds: emptyDeeds(tiles),
     players,
-    currentPlayerIndex: 0,
-    phase: "roll",
+    currentPlayerIndex: firstIdx,
+    phase: "initiative",
     prompt: { kind: "idle" },
+    initiative: {
+      pending,
+      placed: [],
+      playoff: null,
+      partialDie: null,
+    },
     lastDice: null,
     lastCasinoDice: null,
     lastTrackDice: null,
@@ -198,10 +237,202 @@ export function createInitialState(config: GameConfig): GameState {
     lastEvent: null,
     auction: null,
     pendingDebt: null,
-    turn: 1,
-    log: ["对局开始 · Vivondo"],
+    pendingEstate: null,
+    turn: 0,
+    log: [
+      `请${players[firstIdx]!.name}掷2次骰子，总点数大者先出发，平手需加赛（加赛结果不改变非加赛玩家的出发顺序）`,
+      "对局开始 · Vivondo",
+    ],
     winnerId: null,
   };
+}
+
+/** Who must roll next during opening initiative (null if not in that phase). */
+export function initiativeActorId(state: GameState): string | null {
+  const init = state.initiative;
+  if (state.phase !== "initiative" || !init) return null;
+  if (init.playoff) return init.playoff.nextId;
+  return init.pending[0] ?? null;
+}
+
+function syncInitiativeActor(state: GameState): GameState {
+  const id = initiativeActorId(state);
+  if (!id) return state;
+  const idx = findPlayerIndex(state, id);
+  if (idx < 0 || idx === state.currentPlayerIndex) return state;
+  return { ...state, currentPlayerIndex: idx };
+}
+
+function finalizeInitiative(state: GameState): GameState {
+  const init = state.initiative;
+  if (!init || init.pending.length > 0 || init.playoff) return state;
+  const ordered = init.placed.map(
+    (e) => state.players.find((p) => p.id === e.id)!,
+  );
+  const names = ordered.map((p) => p.name).join(" → ");
+  const parts = init.placed.map((e) => {
+    const p = state.players.find((x) => x.id === e.id)!;
+    return `${p.name}=${e.initial}`;
+  });
+  return pushLog(
+    {
+      ...state,
+      players: ordered,
+      currentPlayerIndex: 0,
+      phase: "roll",
+      initiative: null,
+      turn: 1,
+      lastCasinoDice: null,
+      lastDice: null,
+    },
+    `出发顺序确定：${parts.join(" · ")} → ${names}`,
+  );
+}
+
+/**
+ * One die click during opening order (R-004).
+ * Humans must click twice (1st die, then 2nd); AI is driven the same way by the session loop.
+ */
+export function rollInitiative(state: GameState): GameState {
+  if (state.phase !== "initiative" || !state.initiative || state.winnerId) {
+    return state;
+  }
+  const actorId = initiativeActorId(state);
+  if (!actorId) return state;
+
+  const die = 1 + Math.floor(Math.random() * 6);
+  const actor = state.players[findPlayerIndex(state, actorId)]!;
+  const init = state.initiative;
+  const partial = init.partialDie;
+
+  if (partial == null) {
+    let s: GameState = {
+      ...state,
+      lastDice: die,
+      lastCasinoDice: null,
+      initiative: { ...init, partialDie: die },
+    };
+    s = pushLog(s, `${actor.name} 第 1 次掷出 ${die}（请再掷第 2 次）`);
+    return syncInitiativeActor(s);
+  }
+
+  const total = partial + die;
+  let s: GameState = {
+    ...state,
+    lastCasinoDice: [partial, die],
+    lastDice: total,
+    initiative: { ...init, partialDie: null },
+  };
+  s = pushLog(s, `${actor.name} 第 2 次掷出 ${die} · 合计 ${partial}+${die}=${total}`);
+
+  const cur = s.initiative!;
+  if (cur.playoff) {
+    const playoff = cur.playoff;
+    const round = { ...playoff.round, [actorId]: total };
+    const [aId, bId] = playoff.ids;
+    const aRoll = round[aId];
+    const bRoll = round[bId];
+
+    if (aRoll == null || bRoll == null) {
+      const nextId = actorId === aId ? bId : aId;
+      s = {
+        ...s,
+        initiative: {
+          ...cur,
+          playoff: { ...playoff, nextId, round },
+          partialDie: null,
+        },
+      };
+      return syncInitiativeActor(s);
+    }
+
+    if (aRoll === bRoll) {
+      const aP = s.players[findPlayerIndex(s, aId)]!;
+      const bP = s.players[findPlayerIndex(s, bId)]!;
+      s = pushLog(s, `${aP.name} 与 ${bP.name} 加赛再次相同（${aRoll}），再掷`);
+      s = {
+        ...s,
+        initiative: {
+          ...cur,
+          playoff: {
+            ids: playoff.ids,
+            nextId: aId,
+            round: {},
+            band: playoff.band,
+          },
+          partialDie: null,
+        },
+      };
+      return syncInitiativeActor(s);
+    }
+
+    const firstId = aRoll > bRoll ? aId : bId;
+    const secondId = firstId === aId ? bId : aId;
+    const band = playoff.band;
+    const placed = cur.placed.filter((e) => e.id !== aId && e.id !== bId);
+    const insertAt = placed.findIndex((e) => e.initial < band);
+    const at = insertAt < 0 ? placed.length : insertAt;
+    placed.splice(
+      at,
+      0,
+      { id: firstId, initial: band },
+      { id: secondId, initial: band },
+    );
+    const firstP = s.players[findPlayerIndex(s, firstId)]!;
+    const secondP = s.players[findPlayerIndex(s, secondId)]!;
+    s = pushLog(
+      s,
+      `加赛结果：${firstP.name}（${Math.max(aRoll, bRoll)}）先于 ${secondP.name}（${Math.min(aRoll, bRoll)}）`,
+    );
+    s = {
+      ...s,
+      initiative: { pending: cur.pending, placed, playoff: null, partialDie: null },
+    };
+    if (s.initiative!.pending.length === 0) return finalizeInitiative(s);
+    const nextName = s.players[findPlayerIndex(s, s.initiative!.pending[0]!)]!.name;
+    s = pushLog(s, `下一位：请${nextName}掷2次骰子`);
+    return syncInitiativeActor(s);
+  }
+
+  // Initial sum for pending[0]
+  const pending = cur.pending.slice(1);
+  const tied = cur.placed.find((e) => e.initial === total);
+  if (tied) {
+    const tiedP = s.players[findPlayerIndex(s, tied.id)]!;
+    s = pushLog(
+      s,
+      `${actor.name} 与 ${tiedP.name} 同为 ${total}，进入加赛（只比这两人；不影响其他人顺序）`,
+    );
+    const ids: [string, string] = [tied.id, actorId];
+    const humanId = [tied.id, actorId].find(
+      (id) => s.players[findPlayerIndex(s, id)]!.kind === "human",
+    );
+    const nextId = humanId ?? tied.id;
+    const placed = cur.placed.filter((e) => e.id !== tied.id);
+    s = {
+      ...s,
+      initiative: {
+        pending,
+        placed,
+        playoff: { ids, nextId, round: {}, band: total },
+        partialDie: null,
+      },
+    };
+    return syncInitiativeActor(s);
+  }
+
+  const placed = [...cur.placed];
+  const insertAt = placed.findIndex((e) => e.initial < total);
+  const at = insertAt < 0 ? placed.length : insertAt;
+  placed.splice(at, 0, { id: actorId, initial: total });
+  s = {
+    ...s,
+    initiative: { pending, placed, playoff: null, partialDie: null },
+  };
+  if (pending.length === 0) return finalizeInitiative(s);
+  const nextName = s.players[findPlayerIndex(s, pending[0]!)]!.name;
+  s = pushLog(s, `下一位：请${nextName}掷2次骰子`);
+  return syncInitiativeActor(s);
 }
 
 function pushLog(state: GameState, line: string): GameState {
@@ -252,17 +483,23 @@ function payExact(
     const payeeIndex = findPlayerIndex(s, payeeId);
     if (payeeIndex >= 0) {
       const payee = s.players[payeeIndex]!;
-      s = mapPlayer(s, payeeIndex, { cash: payee.cash + paid });
+      if (isHospitalized(payee)) {
+        s = pushLog(
+          s,
+          `${payee.name} 住院中，无法收取 ${paid}（${reason}）· 款项归 GM`,
+        );
+      } else {
+        s = mapPlayer(s, payeeIndex, { cash: payee.cash + paid });
+      }
     }
   }
 
   if (paid < amount) {
-    s = mapPlayer(s, payerIndex, { cash: 0, eliminated: true });
-    s = pushLog(
+    s = declareBankrupt(
       s,
-      `${payer.name} 无力支付 ${reason}（应付 ${amount}，实付 ${paid}）· 破产出局`,
+      payerIndex,
+      `无力支付 ${reason}（应付 ${amount}，实付 ${paid}）`,
     );
-    s = checkWinner(s);
   } else {
     s = pushLog(
       s,
@@ -272,6 +509,150 @@ function payExact(
     );
   }
   return s;
+}
+
+/** Keep auction / debt-pick / estate prompts after payDebt. */
+function settleAfterPayDebt(state: GameState): GameState {
+  if (
+    state.prompt.kind === "debtAuctionPick" ||
+    state.prompt.kind === "auction" ||
+    state.pendingEstate != null
+  ) {
+    return state;
+  }
+  return { ...state, prompt: { kind: "idle" } };
+}
+
+/**
+ * R-017 bankruptcy: mark out; reclaim facilities / tokens / holdable cards
+ * to GM (cards → draw pile + shuffle); auction remaining country tiles.
+ */
+function declareBankrupt(
+  state: GameState,
+  playerIndex: number,
+  reason: string,
+): GameState {
+  const player = state.players[playerIndex]!;
+  if (player.eliminated) return state;
+
+  let s: GameState = state;
+  if (s.pendingDebt?.debtorId === player.id) {
+    s = { ...s, pendingDebt: null };
+  }
+
+  // Facilities: unconditional GM reclaim (never auctioned).
+  for (const t of s.tiles) {
+    if (t.kind !== "facility") continue;
+    if (s.deeds[t.index]?.ownerId !== player.id) continue;
+    s = {
+      ...s,
+      deeds: {
+        ...s.deeds,
+        [t.index]: { ownerId: null, houses: 0, special: null },
+      },
+    };
+    s = pushLog(s, `${player.name} 出局清仓：${t.zh} 无条件归 GM 无主`);
+  }
+
+  // Holdable event cards → draw pile + shuffle (R-030).
+  const returned: string[] = [];
+  if (player.hasDischarge) {
+    s = { ...s, eventDeck: returnCardToDraw(s.eventDeck, "H1") };
+    returned.push("出院卡");
+  }
+  if (player.hasVipCard) {
+    s = { ...s, eventDeck: returnCardToDraw(s.eventDeck, "H3") };
+    returned.push("赌场VIP卡");
+  }
+  if (returned.length > 0) {
+    s = pushLog(
+      s,
+      `${player.name} 出局清仓：${returned.join("、")} 回归事件卡堆并洗牌`,
+    );
+  }
+
+  const tokenBits: string[] = [];
+  if (player.hasPlane) tokenBits.push("飞机");
+  if (player.hasShip) tokenBits.push("轮船");
+  if (player.hasRentFree) tokenBits.push("免租");
+  if (tokenBits.length > 0) {
+    s = pushLog(
+      s,
+      `${player.name} 出局清仓：${tokenBits.join("、")} token 由 GM 收回`,
+    );
+  }
+
+  const queue = auctionableProperties(s, player.id).map((t) => t.index);
+
+  s = mapPlayer(s, playerIndex, {
+    cash: 0,
+    eliminated: true,
+    hasPlane: false,
+    hasShip: false,
+    hasRentFree: false,
+    hasDischarge: false,
+    hasVipCard: false,
+    racetrackPos: null,
+    skipNextMafiaEnter: false,
+    hospitalSkips: 0,
+  });
+  s = pushLog(s, `${player.name} ${reason} · 破产出局`);
+  s = checkWinner(s);
+
+  if (queue.length === 0) {
+    return { ...s, pendingEstate: null, prompt: { kind: "idle" } };
+  }
+
+  s = pushLog(
+    s,
+    `${player.name} 剩余 ${queue.length} 处国家地产进入破产拍卖（流拍归 GM）`,
+  );
+  s = {
+    ...s,
+    pendingEstate: { bankruptId: player.id, queue },
+    auction: null,
+  };
+  return continueEstateLiquidation(s);
+}
+
+function continueEstateLiquidation(state: GameState): GameState {
+  const pe = state.pendingEstate;
+  if (!pe) return { ...state, prompt: { kind: "idle" } };
+
+  const queue = pe.queue.filter(
+    (i) => state.deeds[i]?.ownerId === pe.bankruptId,
+  );
+
+  if (queue.length === 0) {
+    return pushLog(
+      { ...state, pendingEstate: null, auction: null, prompt: { kind: "idle" } },
+      "破产地产清算完毕",
+    );
+  }
+
+  // Game already over — reclaim remaining without bidding.
+  if (state.winnerId) {
+    let s = state;
+    for (const i of queue) {
+      const tile = s.tiles[i]!;
+      s = {
+        ...s,
+        deeds: {
+          ...s.deeds,
+          [i]: { ownerId: null, houses: 0, special: null },
+        },
+      };
+      s = pushLog(s, `${tile.zh} 随终局归 GM 无主`);
+    }
+    return { ...s, pendingEstate: null, auction: null, prompt: { kind: "idle" } };
+  }
+
+  const [next, ...rest] = queue;
+  const s: GameState = {
+    ...state,
+    pendingEstate: { bankruptId: pe.bankruptId, queue: rest },
+  };
+  return startAuction(s, next!, "estate");
 }
 
 function auctionableProperties(
@@ -408,18 +789,45 @@ function resumePendingDebt(state: GameState): GameState {
   return payDebt(s, debtorIndex, debt.amount, debt.payeeId, debt.reason);
 }
 
+function isHospitalized(player: { hospitalSkips: number }): boolean {
+  return player.hospitalSkips > 0;
+}
+
+/**
+ * Credit cash. While hospitalized (R-042), all income is blocked
+ * except forced-auction proceeds (allowInHospital).
+ */
 function gainCash(
   state: GameState,
   playerIndex: number,
   amount: number,
   reason: string,
+  opts?: { allowInHospital?: boolean },
 ): GameState {
   if (amount <= 0) return state;
   const p = state.players[playerIndex]!;
+  if (isHospitalized(p) && !opts?.allowInHospital) {
+    return pushLog(
+      state,
+      `${p.name} 住院中，无法收取 ${amount}（${reason}）`,
+    );
+  }
   return pushLog(
     mapPlayer(state, playerIndex, { cash: p.cash + amount }),
     `${p.name} 获得 ${amount}（${reason}）`,
   );
+}
+
+/** Direct credit used for auction seller proceeds (allowed in hospital). */
+function creditAuctionProceeds(
+  state: GameState,
+  playerIndex: number,
+  amount: number,
+  reason: string,
+): GameState {
+  return gainCash(state, playerIndex, amount, reason, {
+    allowInHospital: true,
+  });
 }
 
 function checkWinner(state: GameState): GameState {
@@ -454,9 +862,18 @@ function applyGoSalary(
     );
   }
 
-  return pushLog(
-    mapPlayer(state, playerIndex, { cash: player.cash + due }),
-    `${player.name} ${landedOnGo ? "停留银行领薪" : "途经银行领薪"} +${due}`,
+  if (isHospitalized(player)) {
+    return pushLog(
+      state,
+      `${player.name} 住院中，无法领取银行工资 ${due}`,
+    );
+  }
+
+  return gainCash(
+    state,
+    playerIndex,
+    due,
+    landedOnGo ? "停留银行领薪" : "途经银行领薪",
   );
 }
 
@@ -468,10 +885,13 @@ function applyStopGoSalary(state: GameState, playerIndex: number): GameState {
       `${player.name} 持飞机 token · 停留银行不领薪，token 收回`,
     );
   }
-  return pushLog(
-    mapPlayer(state, playerIndex, { cash: player.cash + GO_WAGE * 2 }),
-    `${player.name} 停留银行领薪 +${GO_WAGE * 2}`,
-  );
+  if (isHospitalized(player)) {
+    return pushLog(
+      state,
+      `${player.name} 住院中，无法领取银行工资 ${GO_WAGE * 2}`,
+    );
+  }
+  return gainCash(state, playerIndex, GO_WAGE * 2, "停留银行领薪");
 }
 
 export function rollDice(state: GameState): GameState {
@@ -517,6 +937,58 @@ export function rollDice(state: GameState): GameState {
   return beginTileSettlement(s);
 }
 
+/** Continue a two-die human roll (track judge / casino) — one die per click. */
+export function continuePairRoll(state: GameState): GameState {
+  if (state.winnerId) return state;
+  const player = currentPlayer(state);
+  if (player.kind !== "human") return state;
+  const die = 1 + Math.floor(Math.random() * 6);
+
+  if (state.phase === "settle" && state.prompt.kind === "trackJudge") {
+    const { first, pos, depth } = state.prompt;
+    if (first == null) {
+      return pushLog(
+        {
+          ...state,
+          lastDice: die,
+          lastTrackDice: null,
+          prompt: { kind: "trackJudge", first: die, pos, depth },
+        },
+        `${player.name} 第 1 次掷出 ${die}（请再掷第 2 次）`,
+      );
+    }
+    const d = first - die;
+    let s: GameState = {
+      ...state,
+      lastDice: die,
+      lastTrackDice: [first, die],
+    };
+    s = pushLog(s, `${player.name} 第 2 次掷出 ${die}`);
+    return applyTrackJudge(s, pos, depth, first, die, d);
+  }
+
+  if (state.phase === "settle" && state.prompt.kind === "casinoRoll") {
+    const { first } = state.prompt;
+    if (first == null) {
+      return pushLog(
+        {
+          ...state,
+          lastDice: die,
+          lastCasinoDice: null,
+          prompt: { kind: "casinoRoll", first: die },
+        },
+        `${player.name} 第 1 次掷出 ${die}（请再掷第 2 次）`,
+      );
+    }
+    let s: GameState = { ...state, lastDice: die };
+    s = pushLog(s, `${player.name} 第 2 次掷出 ${die}`);
+    return applyCasinoDice(s, first, die);
+  }
+
+  return state;
+}
+
+
 function beginTileSettlement(state: GameState): GameState {
   const player = currentPlayer(state);
   const tile = state.tiles[player.position]!;
@@ -550,10 +1022,10 @@ function settleMafiaEntrance(state: GameState): GameState {
         }),
         prompt: { kind: "idle" },
       },
-      `${player.name} 从跑马场回到黑手党入口`,
+      `${player.name} 从跑马场回到赌城入口`,
     );
   }
-  if (player.hasMafiaDeed) {
+  if (player.hasVipCard) {
     return { ...state, prompt: { kind: "mafiaEnter" } };
   }
   return enterRacetrack(state);
@@ -564,7 +1036,7 @@ function enterRacetrack(state: GameState): GameState {
   let s = mapPlayer(state, state.currentPlayerIndex, { racetrackPos: 0 });
   s = pushLog(
     s,
-    `${player.name} 进入黑手党跑马场（起终点）· 本回合必须立刻前进`,
+    `${player.name} 进入跑马场（起终点）· 本回合必须立刻前进`,
   );
   const dice = 1 + Math.floor(Math.random() * 6);
   s = { ...s, lastDice: dice, phase: "settle" };
@@ -613,9 +1085,36 @@ function resolveTrackCell(
     return { ...state, prompt: { kind: "idle" } };
   }
 
-  const { d1, d2, d } = rollTrackDelta();
-  let s: GameState = { ...state, lastTrackDice: [d1, d2] };
+  const player = currentPlayer(state);
+  if (player.kind === "ai") {
+    const { d1, d2, d } = rollTrackDelta();
+    return applyTrackJudge(state, pos, depth, d1, d2, d);
+  }
+  return pushLog(
+    {
+      ...state,
+      prompt: { kind: "trackJudge", first: null, pos, depth },
+      lastTrackDice: null,
+    },
+    `${player.name}请掷2次骰子判定（差值 = 第1次 − 第2次）`,
+  );
+}
+
+function applyTrackJudge(
+  state: GameState,
+  pos: number,
+  depth: number,
+  d1: number,
+  d2: number,
+  d: number,
+): GameState {
+  let s: GameState = {
+    ...state,
+    lastTrackDice: [d1, d2],
+    prompt: { kind: "idle" },
+  };
   const player = currentPlayer(s);
+  const kind = trackCellKind(pos);
   s = pushLog(s, `跑马场判定 ${d1}−${d2}=${d}`);
 
   if (kind === "money") {
@@ -654,14 +1153,14 @@ function resolveTrackCell(
 
   // gun
   if (d === 0) {
-    return pushLog({ ...s, prompt: { kind: "idle" } }, "手枪：无事");
+    return pushLog({ ...s, prompt: { kind: "idle" } }, "老虎机：无事");
   }
   if (d > 0) {
     const opts = gunBuildOptions(s, player.id);
     if (opts.length === 0) {
       return pushLog(
         { ...s, prompt: { kind: "idle" } },
-        "手枪加盖：无可用地产，跳过",
+        "老虎机加盖：无可用地产，跳过",
       );
     }
     return { ...s, prompt: { kind: "racetrackGunBuild" } };
@@ -671,7 +1170,7 @@ function resolveTrackCell(
   if (opts.length === 0) {
     return pushLog(
       { ...s, prompt: { kind: "idle" } },
-      "手枪拆房：无可用地产，跳过",
+      "老虎机拆房：无可用地产，跳过",
     );
   }
   return { ...s, prompt: { kind: "racetrackGunDemolish" } };
@@ -708,14 +1207,14 @@ export function cancelMafiaEnter(state: GameState): GameState {
     return state;
   }
   const player = currentPlayer(state);
-  if (!player.hasMafiaDeed) return state;
-  let s = mapPlayer(state, state.currentPlayerIndex, { hasMafiaDeed: false });
+  if (!player.hasVipCard) return state;
+  let s = mapPlayer(state, state.currentPlayerIndex, { hasVipCard: false });
   s = {
     ...s,
     eventDeck: discardEventCard(s.eventDeck, "H3"),
     prompt: { kind: "idle" },
   };
-  return pushLog(s, `${player.name} 弃置黑手党地契，取消进入跑马场`);
+  return pushLog(s, `${player.name} 弃置赌场VIP卡，取消进入跑马场`);
 }
 
 export function acceptMafiaEnter(state: GameState): GameState {
@@ -744,7 +1243,7 @@ export function pickGunBuild(state: GameState, tileIndex: number): GameState {
   };
   return pushLog(
     s,
-    `${player.name} 手枪免费加盖 ${tile.zh} → ${deed.houses + 1} 屋`,
+    `${player.name} 老虎机免费加盖 ${tile.zh} → ${deed.houses + 1} 屋`,
   );
 }
 
@@ -774,7 +1273,7 @@ export function pickGunDemolish(state: GameState, tileIndex: number): GameState 
     deeds: { ...state.deeds, [tileIndex]: nextDeed },
     prompt: { kind: "idle" },
   };
-  return pushLog(s, `${player.name} 手枪拆房：${note}`);
+  return pushLog(s, `${player.name} 老虎机拆房：${note}`);
 }
 
 export function skipGunEffect(state: GameState): GameState {
@@ -787,7 +1286,7 @@ export function skipGunEffect(state: GameState): GameState {
   }
   return pushLog(
     { ...state, prompt: { kind: "idle" } },
-    `${currentPlayer(state).name} 跳过手枪效果`,
+    `${currentPlayer(state).name} 跳过老虎机效果`,
   );
 }
 
@@ -823,6 +1322,22 @@ function settleOwnable(state: GameState, tile: BoardTile): GameState {
     return { ...state, prompt: { kind: "buy", tileIndex: tile.index } };
   }
 
+  const landlord = state.players.find((p) => p.id === deed.ownerId);
+  // Safety: eliminated owners must not collect rent — reclaim as unowned.
+  if (landlord?.eliminated) {
+    const s: GameState = {
+      ...state,
+      deeds: {
+        ...state.deeds,
+        [tile.index]: { ownerId: null, houses: 0, special: null },
+      },
+    };
+    return pushLog(
+      { ...s, prompt: { kind: "buy", tileIndex: tile.index } },
+      `${tile.zh} 原属已出局玩家，收归 GM 无主`,
+    );
+  }
+
   if (deed.ownerId === player.id) {
     if (tile.kind === "facility") {
       return {
@@ -831,10 +1346,16 @@ function settleOwnable(state: GameState, tile: BoardTile): GameState {
       };
     }
     if (deed.special != null) {
-      return pushLog(
-        { ...state, prompt: { kind: "idle" } },
-        `${player.name} 停在自己的 ${tile.zh}`,
-      );
+      const cost = tile.price ?? 0;
+      return {
+        ...state,
+        prompt: {
+          kind: "upgrade",
+          tileIndex: tile.index,
+          cost,
+          mode: "respecialize",
+        },
+      };
     }
     const cost = upgradeCost(state.tiles, state.deeds, player.id, tile.index);
     if (cost == null) return { ...state, prompt: { kind: "idle" } };
@@ -902,7 +1423,7 @@ function settleOwnable(state: GameState, tile: BoardTile): GameState {
   }
 
   s = payDebt(s, s.currentPlayerIndex, due, deed.ownerId, `${tile.zh} 地租`);
-  return { ...s, prompt: { kind: "idle" } };
+  return settleAfterPayDebt(s);
 }
 
 function settleCorner(state: GameState, tile: BoardTile): GameState {
@@ -926,7 +1447,7 @@ function settleCorner(state: GameState, tile: BoardTile): GameState {
     return admitHospital(state);
   }
 
-  if (tile.zh === "赌场") {
+  if (tile.zh === "证券交易所" || tile.zh === "赌场") {
     return resolveCasino(state);
   }
 
@@ -943,7 +1464,7 @@ function admitHospital(state: GameState): GameState {
   s = mapPlayer(s, s.currentPlayerIndex, { hospitalSkips: 2 });
   return pushLog(
     { ...s, prompt: { kind: "idle" } },
-    `${currentPlayer(s).name} 入院住院，将跳过接下来 2 次掷骰`,
+    `${currentPlayer(s).name} 入院住院，将跳过接下来 2 次掷骰；出院前不能收钱（被迫拍卖款除外）`,
   );
 }
 
@@ -957,18 +1478,28 @@ function resolveCasino(state: GameState): GameState {
   s = { ...s, casinoPool: s.casinoPool + paid };
 
   if (paid < entry) {
-    s = mapPlayer(s, playerIndex, { cash: 0, eliminated: true });
-    s = pushLog(s, `${player.name} 无力支付赌场入场费 · 破产出局`);
-    return { ...checkWinner(s), prompt: { kind: "idle" } };
+    return declareBankrupt(s, playerIndex, "无力支付证券入场费");
   }
 
-  s = pushLog(s, `${player.name} 支付赌场入场费 200 · 奖池 ${s.casinoPool}`);
+  s = pushLog(s, `${player.name} 支付证券入场费 200 · 奖池 ${s.casinoPool}`);
 
-  const d1 = 1 + Math.floor(Math.random() * 6);
-  const d2 = 1 + Math.floor(Math.random() * 6);
+  if (player.kind === "ai") {
+    const d1 = 1 + Math.floor(Math.random() * 6);
+    const d2 = 1 + Math.floor(Math.random() * 6);
+    return applyCasinoDice(s, d1, d2);
+  }
+  return pushLog(
+    { ...s, prompt: { kind: "casinoRoll", first: null }, lastCasinoDice: null },
+    `${player.name}请掷2次骰子参与证券结算`,
+  );
+}
+
+function applyCasinoDice(state: GameState, d1: number, d2: number): GameState {
+  const playerIndex = state.currentPlayerIndex;
+  const player = state.players[playerIndex]!;
   const sum = d1 + d2;
-  s = { ...s, lastCasinoDice: [d1, d2] };
-  s = pushLog(s, `${player.name} 赌场掷出 ${d1}+${d2}=${sum}`);
+  let s: GameState = { ...state, lastCasinoDice: [d1, d2] };
+  s = pushLog(s, `${player.name} 证券掷出 ${d1}+${d2}=${sum}`);
 
   if (d1 === 1 && d2 === 1) {
     const extra = Math.min(s.players[playerIndex]!.cash, 200);
@@ -977,37 +1508,25 @@ function resolveCasino(state: GameState): GameState {
     });
     s = { ...s, casinoPool: s.casinoPool + extra };
     if (extra < 200) {
-      s = mapPlayer(s, playerIndex, { cash: 0, eliminated: true });
-      s = pushLog(s, "赌场：大失败（双 1）· 破产出局");
-      s = checkWinner(s);
-    } else {
-      s = pushLog(s, "赌场：大失败（双 1）追加 200");
+      return declareBankrupt(s, playerIndex, "证券：大失败（双 1）");
     }
+    s = pushLog(s, "证券：大失败（双 1）追加 200");
   } else if (d1 === 6 && d2 === 6) {
     const win = s.casinoPool;
-    s = mapPlayer(s, playerIndex, {
-      cash: s.players[playerIndex]!.cash + win,
-    });
     s = { ...s, casinoPool: 0 };
-    s = pushLog(s, `赌场：大成功（双 6）取走奖池 ${win}`);
+    s = gainCash(s, playerIndex, win, "证券大成功取走奖池");
   } else if (sum === 7) {
-    s = mapPlayer(s, playerIndex, {
-      cash: s.players[playerIndex]!.cash + 200,
-    });
     s = { ...s, casinoPool: Math.max(0, s.casinoPool - 200) };
-    s = pushLog(s, "赌场：退还入场费 200");
+    s = gainCash(s, playerIndex, 200, "证券退还入场费");
   } else if (sum >= 8) {
     const win = Math.min(400, s.casinoPool);
-    s = mapPlayer(s, playerIndex, {
-      cash: s.players[playerIndex]!.cash + win,
-    });
     s = { ...s, casinoPool: s.casinoPool - win };
-    s = pushLog(s, `赌场：赢取 ${win}`);
+    s = gainCash(s, playerIndex, win, "证券赢取");
   } else {
-    s = pushLog(s, "赌场：输（入场费沉没）");
+    s = pushLog(s, "证券：输（入场费沉没）");
   }
 
-  return { ...s, prompt: { kind: "idle" } };
+  return settleAfterPayDebt(s);
 }
 
 function drawAndResolveEvent(state: GameState): GameState {
@@ -1030,15 +1549,15 @@ function drawAndResolveEvent(state: GameState): GameState {
 function resolveHoldable(
   state: GameState,
   card: EventCardId,
-  hold: "discharge" | "mafia",
+  hold: "discharge" | "vip",
 ): GameState {
   const player = currentPlayer(state);
   const has =
-    hold === "discharge" ? player.hasDischarge : player.hasMafiaDeed;
+    hold === "discharge" ? player.hasDischarge : player.hasVipCard;
 
   if (!has) {
     const patch =
-      hold === "discharge" ? { hasDischarge: true } : { hasMafiaDeed: true };
+      hold === "discharge" ? { hasDischarge: true } : { hasVipCard: true };
     return pushLog(
       {
         ...mapPlayer(state, state.currentPlayerIndex, patch),
@@ -1102,15 +1621,9 @@ function resolveInstant(state: GameState, card: EventCardId): GameState {
     case "E05":
       return { ...gainCash(s, idx, 150, "股票分红"), prompt: { kind: "idle" } };
     case "E06":
-      return {
-        ...payDebt(s, idx, 200, null, "所得税"),
-        prompt: { kind: "idle" },
-      };
+      return settleAfterPayDebt(payDebt(s, idx, 200, null, "所得税"));
     case "E07":
-      return {
-        ...payDebt(s, idx, 100, null, "医疗费"),
-        prompt: { kind: "idle" },
-      };
+      return settleAfterPayDebt(payDebt(s, idx, 100, null, "医疗费"));
     case "E08": {
       const fee = roadFeeAmount(s, player.id);
       if (fee <= 0) {
@@ -1119,16 +1632,20 @@ function resolveInstant(state: GameState, card: EventCardId): GameState {
           `${player.name} 修路费 0`,
         );
       }
-      return {
-        ...payDebt(s, idx, fee, null, "修路费"),
-        prompt: { kind: "idle" },
-      };
+      return settleAfterPayDebt(payDebt(s, idx, fee, null, "修路费"));
     }
     case "E09": {
       for (let i = 0; i < s.players.length; i++) {
         if (i === idx || s.players[i]!.eliminated) continue;
         s = payDebt(s, i, 50, player.id, "生日礼金");
-        if (s.winnerId) break;
+        if (
+          s.prompt.kind === "debtAuctionPick" ||
+          s.prompt.kind === "auction" ||
+          s.pendingEstate != null ||
+          s.winnerId
+        ) {
+          return s;
+        }
       }
       return { ...s, prompt: { kind: "idle" } };
     }
@@ -1136,7 +1653,15 @@ function resolveInstant(state: GameState, card: EventCardId): GameState {
       for (let i = 0; i < s.players.length; i++) {
         if (i === idx || s.players[i]!.eliminated) continue;
         s = payDebt(s, idx, 50, s.players[i]!.id, "董事长分红");
-        if (s.players[idx]!.eliminated || s.winnerId) break;
+        if (
+          s.prompt.kind === "debtAuctionPick" ||
+          s.prompt.kind === "auction" ||
+          s.pendingEstate != null ||
+          s.players[idx]!.eliminated ||
+          s.winnerId
+        ) {
+          return settleAfterPayDebt(s);
+        }
       }
       return { ...s, prompt: { kind: "idle" } };
     }
@@ -1171,17 +1696,13 @@ function resolveInstant(state: GameState, card: EventCardId): GameState {
           prompt: { kind: "idle" },
         };
       }
-      return {
-        ...payDebt(s, idx, 100, null, "油价波动"),
-        prompt: { kind: "idle" },
-      };
+      return settleAfterPayDebt(payDebt(s, idx, 100, null, "油价波动"));
     }
     case "E16": {
       if (playerOwnsFacility(s.tiles, s.deeds, player.id, "矿山")) {
-        return {
-          ...payDebt(s, idx, 150, null, "矿难抚恤（持有矿山）"),
-          prompt: { kind: "idle" },
-        };
+        return settleAfterPayDebt(
+          payDebt(s, idx, 150, null, "矿难抚恤（持有矿山）"),
+        );
       }
       return {
         ...gainCash(s, idx, 50, "矿难抚恤"),
@@ -1189,10 +1710,10 @@ function resolveInstant(state: GameState, card: EventCardId): GameState {
       };
     }
     case "E17": {
-      const casino = findTileIndex(s, (t) => t.zh === "赌场");
+      const casino = findTileIndex(s, (t) => t.zh === "证券交易所" || t.zh === "赌场");
       if (casino >= 0) {
         s = mapPlayer(s, idx, { position: casino });
-        s = pushLog(s, `${player.name} 被请到赌场`);
+        s = pushLog(s, `${player.name} 被请到证券交易所`);
       }
       return resolveCasino(s);
     }
@@ -1238,7 +1759,7 @@ function ownedCountryProperties(
 function startAuction(
   state: GameState,
   tileIndex: number,
-  source: "e18" | "debt",
+  source: "e18" | "debt" | "estate",
 ): GameState {
   const tile = state.tiles[tileIndex]!;
   const deed = state.deeds[tileIndex]!;
@@ -1251,7 +1772,7 @@ function startAuction(
     .filter((p) => !p.eliminated && p.id !== ownerId && p.cash >= start)
     .map((p) => p.id);
 
-  // E18 / debt: reset to plain 0-house before auction listing
+  // Reset to plain 0-house before auction listing
   let s: GameState = {
     ...state,
     deeds: {
@@ -1277,9 +1798,11 @@ function startAuction(
     return `${p.name}=${auction.rolls[id]}`;
   });
 
+  const tag =
+    source === "estate" ? "破产拍卖" : source === "debt" ? "筹资拍卖" : "强制拍卖";
   s = pushLog(
     s,
-    `拍卖开始：${tile.zh} · 起拍 ${auction.startPrice} · 一口价 ${auction.buyoutPrice} · 出价序 ${rollParts.join(" → ")}`,
+    `${tag}开始：${tile.zh} · 起拍 ${auction.startPrice} · 一口价 ${auction.buyoutPrice} · 出价序 ${rollParts.join(" → ")}`,
   );
   return {
     ...s,
@@ -1293,16 +1816,31 @@ function finalizePassedIn(
   tileIndex: number,
   ownerId: string,
   price: number,
-  source: "e18" | "debt",
+  source: "e18" | "debt" | "estate",
 ): GameState {
   const ownerIndex = findPlayerIndex(state, ownerId);
-  const refund = Math.max(0, price - 50);
   let s = state;
-  if (ownerIndex >= 0) {
-    s = mapPlayer(s, ownerIndex, {
-      cash: s.players[ownerIndex]!.cash + refund,
-    });
+
+  // Estate pass-in: unconditional GM reclaim, no refund to bankrupt.
+  if (source !== "estate" && ownerIndex >= 0) {
+    const refund = Math.max(0, price - 50);
+    s = creditAuctionProceeds(
+      s,
+      ownerIndex,
+      refund,
+      "被迫拍卖流拍退款",
+    );
+    s = pushLog(
+      s,
+      `${s.tiles[tileIndex]!.zh} 流拍 · 原地主收回 ${refund}，地产归 GM 无主`,
+    );
+  } else {
+    s = pushLog(
+      s,
+      `${s.tiles[tileIndex]!.zh} 流拍 · 归 GM 无主`,
+    );
   }
+
   s = {
     ...s,
     deeds: {
@@ -1311,11 +1849,10 @@ function finalizePassedIn(
     },
     auction: null,
   };
-  const tile = s.tiles[tileIndex]!;
-  s = pushLog(
-    s,
-    `${tile.zh} 流拍 · 原地主收回 ${refund}，地产归 GM 无主`,
-  );
+
+  if (source === "estate" || s.pendingEstate) {
+    return continueEstateLiquidation(s);
+  }
   if (source === "debt" || s.pendingDebt) {
     return resumePendingDebt(s);
   }
@@ -1338,11 +1875,17 @@ function finalizeSold(
   let s = mapPlayer(state, buyerIndex, {
     cash: state.players[buyerIndex]!.cash - salePrice,
   });
-  if (sellerIndex >= 0) {
-    s = mapPlayer(s, sellerIndex, {
-      cash: s.players[sellerIndex]!.cash + toOwner,
-    });
+
+  // Estate sales: bankrupt gets nothing; GM keeps the seller half.
+  if (auction.source !== "estate" && sellerIndex >= 0) {
+    s = creditAuctionProceeds(
+      s,
+      sellerIndex,
+      toOwner,
+      "被迫拍卖成交款",
+    );
   }
+
   s = {
     ...s,
     deeds: {
@@ -1353,9 +1896,14 @@ function finalizeSold(
   };
   s = pushLog(
     s,
-    `${s.players[buyerIndex]!.name} 以 ${salePrice} 拍得 ${tile.zh} · 原地主得 ${toOwner}（GM 收一半）`,
+    auction.source === "estate"
+      ? `${s.players[buyerIndex]!.name} 以 ${salePrice} 拍得破产地产 ${tile.zh}`
+      : `${s.players[buyerIndex]!.name} 以 ${salePrice} 拍得 ${tile.zh} · 原地主得 ${toOwner}（GM 收一半）`,
   );
 
+  if (auction.source === "estate" || s.pendingEstate) {
+    return continueEstateLiquidation(s);
+  }
   if (auction.source === "debt" || s.pendingDebt) {
     return resumePendingDebt(s);
   }
@@ -1565,8 +2113,11 @@ export function chooseUpgrade(
     return pushLog(state, `${player.name} 现金不足，无法加盖 ${tile.zh}`);
   }
 
-  if (mode === "specialize") {
+  if (mode === "specialize" || mode === "respecialize") {
     if (!special) return state;
+    if (mode === "respecialize" && deed.special === special) {
+      return pushLog(state, `${player.name} 已是该类型，请选择其他类型`);
+    }
     let s = mapPlayer(state, state.currentPlayerIndex, {
       cash: player.cash - cost,
     });
@@ -1586,7 +2137,9 @@ export function chooseUpgrade(
           : "旅游国";
     return pushLog(
       s,
-      `${player.name} 将 ${tile.zh} 特性化为${label}，花费 ${cost}`,
+      mode === "respecialize"
+        ? `${player.name} 将 ${tile.zh} 改造成${label}，花费 ${cost}`
+        : `${player.name} 将 ${tile.zh} 特性化为${label}，花费 ${cost}`,
     );
   }
 
@@ -1610,9 +2163,15 @@ export function chooseUpgrade(
 export function declineUpgrade(state: GameState): GameState {
   if (state.phase !== "settle" || state.prompt.kind !== "upgrade") return state;
   const tile = state.tiles[state.prompt.tileIndex]!;
+  const verb =
+    state.prompt.mode === "respecialize"
+      ? "跳过改造"
+      : state.prompt.mode === "specialize"
+        ? "跳过特性化"
+        : "跳过加盖";
   return pushLog(
     { ...state, prompt: { kind: "idle" } },
-    `${currentPlayer(state).name} 跳过加盖 ${tile.zh}`,
+    `${currentPlayer(state).name} ${verb} ${tile.zh}`,
   );
 }
 
@@ -1735,7 +2294,7 @@ export function declineRentFree(state: GameState): GameState {
     landlordId,
     `${tileZh} 地租`,
   );
-  return { ...s, prompt: { kind: "idle" } };
+  return settleAfterPayDebt(s);
 }
 
 export function portDispatchTakeCash(state: GameState): GameState {
@@ -1770,14 +2329,14 @@ export function cancelForceAuction(state: GameState): GameState {
     return state;
   }
   const player = currentPlayer(state);
-  if (!player.hasMafiaDeed) return state;
-  let s = mapPlayer(state, state.currentPlayerIndex, { hasMafiaDeed: false });
+  if (!player.hasVipCard) return state;
+  let s = mapPlayer(state, state.currentPlayerIndex, { hasVipCard: false });
   s = {
     ...s,
     eventDeck: discardEventCard(s.eventDeck, "H3"),
     prompt: { kind: "idle" },
   };
-  return pushLog(s, `${player.name} 弃置黑手党地契，取消强制拍卖`);
+  return pushLog(s, `${player.name} 弃置赌场VIP卡，取消强制拍卖`);
 }
 
 export function proceedForceAuction(state: GameState): GameState {
