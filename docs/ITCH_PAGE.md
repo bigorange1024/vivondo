@@ -45,7 +45,7 @@
 - 部分文案/素材可能经 AI 辅助整理。
 
 ### 系统需求
-现代桌面或手机浏览器（建议 Chrome / Edge / Firefox / Safari 近两年版本）。横屏体验更佳。
+现代桌面或手机浏览器（建议 Chrome / Edge / Firefox / Safari 近两年版本）。大屏体验更佳。
 
 Copyright © 2026 bigorange1024. All Rights Reserved.
 
@@ -79,7 +79,7 @@ Click **Run game** on the itch.io page — no Node.js install required.
 - Some text or assets may be AI-assisted.
 
 ### Requirements
-A recent desktop or mobile browser (Chrome / Edge / Firefox / Safari recommended). Landscape works best.
+A recent desktop or mobile browser (Chrome / Edge / Firefox / Safari recommended). Larger screens work best.
 
 Copyright © 2026 bigorange1024. All Rights Reserved.
 
