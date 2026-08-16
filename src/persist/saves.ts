@@ -26,6 +26,54 @@ export interface SaveSlotInfo {
 
 const LS_PREFIX = "vivondo-save-slot-";
 
+/** True only when the Vite save API is really present (not a static 404/HTML). */
+let diskApiProbe: Promise<boolean> | null = null;
+
+function probeDiskApi(): Promise<boolean> {
+  if (!diskApiProbe) {
+    diskApiProbe = (async () => {
+      try {
+        const res = await fetch("/api/saves");
+        if (!res.ok) return false;
+        const data = (await res.json()) as { slots?: unknown };
+        return Array.isArray(data.slots);
+      } catch {
+        return false;
+      }
+    })();
+  }
+  return diskApiProbe;
+}
+
+function storageGet(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    throw new Error(
+      "浏览器禁止本地存档（嵌入页/隐私设置）。请换浏览器或允许本站存储。 / Local saves blocked by the browser.",
+    );
+  }
+}
+
+function storageSet(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `无法写入存档：${msg}。嵌入页可能禁用了本地存储。 / Cannot write save (storage may be blocked).`,
+    );
+  }
+}
+
+function storageRemove(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
+
 function isSaveMeta(v: unknown): v is SaveMeta {
   if (!v || typeof v !== "object") return false;
   const m = v as SaveMeta;
@@ -73,6 +121,7 @@ function parseSaveFile(raw: string): SaveFile {
 }
 
 async function listFromApi(): Promise<SaveSlotInfo[] | null> {
+  if (!(await probeDiskApi())) return null;
   try {
     const res = await fetch("/api/saves");
     if (!res.ok) return null;
@@ -90,6 +139,7 @@ async function listFromApi(): Promise<SaveSlotInfo[] | null> {
 }
 
 async function writeToApi(slot: number, file: SaveFile): Promise<boolean> {
+  if (!(await probeDiskApi())) return false;
   try {
     const res = await fetch(`/api/saves/${slot}`, {
       method: "PUT",
@@ -103,6 +153,7 @@ async function writeToApi(slot: number, file: SaveFile): Promise<boolean> {
 }
 
 async function deleteFromApi(slot: number): Promise<boolean> {
+  if (!(await probeDiskApi())) return false;
   try {
     const res = await fetch(`/api/saves/${slot}`, { method: "DELETE" });
     return res.ok || res.status === 404;
@@ -114,7 +165,7 @@ async function deleteFromApi(slot: number): Promise<boolean> {
 function listFromLocalStorage(): SaveSlotInfo[] {
   const slots: SaveSlotInfo[] = [];
   for (let slot = 1; slot <= MAX_SAVE_SLOTS; slot++) {
-    const raw = localStorage.getItem(LS_PREFIX + slot);
+    const raw = storageGet(LS_PREFIX + slot);
     if (!raw) {
       slots.push({ slot, exists: false, meta: null });
       continue;
@@ -130,17 +181,17 @@ function listFromLocalStorage(): SaveSlotInfo[] {
 }
 
 function readFromLocalStorage(slot: number): SaveFile | null {
-  const raw = localStorage.getItem(LS_PREFIX + slot);
+  const raw = storageGet(LS_PREFIX + slot);
   if (!raw) return null;
   return parseSaveFile(raw);
 }
 
 function writeToLocalStorage(slot: number, file: SaveFile): void {
-  localStorage.setItem(LS_PREFIX + slot, JSON.stringify(file));
+  storageSet(LS_PREFIX + slot, JSON.stringify(file));
 }
 
 function deleteFromLocalStorage(slot: number): void {
-  localStorage.removeItem(LS_PREFIX + slot);
+  storageRemove(LS_PREFIX + slot);
 }
 
 function assertSlot(slot: number): void {
@@ -158,12 +209,14 @@ export async function listSaveSlots(): Promise<SaveSlotInfo[]> {
 
 export async function readSaveSlot(slot: number): Promise<SaveFile | null> {
   assertSlot(slot);
-  try {
-    const res = await fetch(`/api/saves/${slot}`);
-    if (res.ok) return parseSaveFile(await res.text());
-    if (res.status === 404) return null;
-  } catch {
-    /* fall through to localStorage */
+  if (await probeDiskApi()) {
+    try {
+      const res = await fetch(`/api/saves/${slot}`);
+      if (res.ok) return parseSaveFile(await res.text());
+      if (res.status === 404) return null;
+    } catch {
+      /* fall through to localStorage */
+    }
   }
   return readFromLocalStorage(slot);
 }
@@ -180,7 +233,7 @@ export async function writeSaveSlot(
 
 export async function deleteSaveSlot(slot: number): Promise<void> {
   assertSlot(slot);
-  await deleteFromApi(slot);
+  if (await probeDiskApi()) await deleteFromApi(slot);
   deleteFromLocalStorage(slot);
 }
 
@@ -197,8 +250,7 @@ export type SaveBackend = "disk" | "browser";
 
 /** Disk API available (dev server) vs browser-only (itch / static). */
 export async function detectSaveBackend(): Promise<SaveBackend> {
-  const api = await listFromApi();
-  return api ? "disk" : "browser";
+  return (await probeDiskApi()) ? "disk" : "browser";
 }
 
 /** Bilingual save warnings — show in UI, store pages, and PLAY.txt. */

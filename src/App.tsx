@@ -202,36 +202,48 @@ export default function App() {
   };
 
   const applyLoad = async (slot: number) => {
-    const file = await readSaveSlot(slot);
-    if (!file) {
-      setToast(`存档 #${slot} 不存在 · Save #${slot} missing`);
-      return;
+    try {
+      const file = await readSaveSlot(slot);
+      if (!file) {
+        setToast(`存档 #${slot} 不存在 · Save #${slot} missing`);
+        return;
+      }
+      pendingImport.current = file.state;
+      setConfig({
+        humans: file.config.humans,
+        ais: file.config.ais,
+        startingCash: file.config.startingCash ?? 5000,
+      });
+      setSessionEpoch((n) => n + 1);
+      setScreen("play");
+      setToast(`已读取存档 #${slot} · Loaded slot #${slot}`);
+    } catch (e: unknown) {
+      setToast(e instanceof Error ? e.message : "读取失败 · Load failed");
     }
-    pendingImport.current = file.state;
-    setConfig({
-      humans: file.config.humans,
-      ais: file.config.ais,
-      startingCash: file.config.startingCash ?? 5000,
-    });
-    setSessionEpoch((n) => n + 1);
-    setScreen("play");
-    setToast(`已读取存档 #${slot} · Loaded slot #${slot}`);
   };
 
   const applySave = async (slot: number) => {
     if (!session || !config) return;
-    const file = buildSaveFile(session.exportState(), config);
-    const where = await writeSaveSlot(slot, file);
-    setToast(
-      where === "disk"
-        ? `已保存到本机 save/slot-${slot}.json · Saved to disk slot #${slot}`
-        : `已保存到本浏览器本地 #${slot}（非云存档） · Saved in this browser only #${slot}`,
-    );
+    try {
+      const file = buildSaveFile(session.exportState(), config);
+      const where = await writeSaveSlot(slot, file);
+      setToast(
+        where === "disk"
+          ? `已保存到本机 save/slot-${slot}.json · Saved to disk slot #${slot}`
+          : `已保存到本浏览器本地 #${slot}（非云存档） · Saved in this browser only #${slot}`,
+      );
+    } catch (e: unknown) {
+      setToast(e instanceof Error ? e.message : "保存失败 · Save failed");
+    }
   };
 
   const applyDelete = async (slot: number) => {
-    await deleteSaveSlot(slot);
-    setToast(`已删除存档 #${slot} · Deleted slot #${slot}`);
+    try {
+      await deleteSaveSlot(slot);
+      setToast(`已删除存档 #${slot} · Deleted slot #${slot}`);
+    } catch (e: unknown) {
+      setToast(e instanceof Error ? e.message : "删除失败 · Delete failed");
+    }
   };
 
   const onSlotPicked = (slot: number, exists: boolean) => {
