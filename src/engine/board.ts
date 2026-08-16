@@ -169,6 +169,37 @@ export function tileCenterPercent(tile: BoardTile): { x: number; y: number } {
   };
 }
 
+export const CONTINENT_COLORS: Record<string, string> = {
+  asia: "#c62828",
+  europe: "#0d47a1",
+  africa: "#ef6c00",
+  sa: "#8e74c8",
+  ca: "#455a64",
+  na: "#81d4fa",
+  oceania: "#00a86b",
+};
+
+/** Full tile face box (% of play area), matching render_board_v7 gap. */
+export function tileRectPercent(tile: BoardTile): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+} {
+  const { margin, cell, playSize } = BOARD_PNG;
+  const gap = 3;
+  const x0 = margin + tile.col * cell + gap;
+  const y0 = margin + tile.row * cell + gap;
+  const tw = cell - gap * 2;
+  const th = cell - gap * 2;
+  return {
+    left: (x0 / playSize) * 100,
+    top: (y0 / playSize) * 100,
+    width: (tw / playSize) * 100,
+    height: (th / playSize) * 100,
+  };
+}
+
 /** Continent color bar at bottom of a property tile (% of play area). Matches render_board_v7. */
 export function tileContinentBarPercent(tile: BoardTile): {
   left: number;
@@ -176,17 +207,16 @@ export function tileContinentBarPercent(tile: BoardTile): {
   width: number;
   height: number;
 } {
-  const { margin, cell, playSize } = BOARD_PNG;
-  const gap = 3; // TILE_GAP in render_board_v7.py
-  const x0 = margin + tile.col * cell + gap;
-  const y0 = margin + tile.row * cell + gap;
-  const tw = cell - gap * 2;
+  const rect = tileRectPercent(tile);
+  const { cell, playSize } = BOARD_PNG;
+  const gap = 3;
   const th = cell - gap * 2;
   const barH = Math.max(14, Math.floor(th * 0.2));
+  const barHPct = (barH / playSize) * 100;
   return {
-    left: ((x0 + 1) / playSize) * 100,
-    top: ((y0 + th - barH) / playSize) * 100,
-    width: ((tw - 2) / playSize) * 100,
-    height: (barH / playSize) * 100,
+    left: rect.left + (1 / playSize) * 100,
+    top: rect.top + rect.height - barHPct,
+    width: rect.width - (2 / playSize) * 100,
+    height: barHPct,
   };
 }

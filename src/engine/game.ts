@@ -835,7 +835,7 @@ function checkWinner(state: GameState): GameState {
   if (alive.length === 1) {
     return pushLog(
       { ...state, winnerId: alive[0]!.id },
-      `${alive[0]!.name} 获胜（独占存活）`,
+      `${alive[0]!.name} 获胜`,
     );
   }
   return state;

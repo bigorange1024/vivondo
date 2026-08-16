@@ -170,21 +170,54 @@ body {
     0 2px 6px rgba(0, 0, 0, 0.35);
 }
 
-.deed-mark {
+/* Owned tile: thick player-color frame only (no fill / no %-padding — those
+   expand relative to the whole board width and blow up into giant slabs). */
+.deed-wash {
   position: absolute;
-  width: calc(var(--board-scale) * 14px);
-  height: calc(var(--board-scale) * 14px);
-  border-radius: 2px;
-  transform: translate(-50%, -50%);
-  border: 1px solid #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-  font-size: calc(var(--board-scale) * 9px);
-  line-height: calc(var(--board-scale) * 12px);
-  text-align: center;
-  color: #fff;
-  font-weight: 700;
   pointer-events: none;
-  z-index: 4;
+  z-index: 3;
+  box-sizing: border-box;
+  border-radius: calc(var(--board-scale) * 2px);
+  border: calc(var(--board-scale) * 4px) solid;
+  background: transparent;
+  box-shadow: inset 0 0 0 calc(var(--board-scale) * 2px) rgba(255, 255, 255, 0.35);
+}
+
+/* R-025 seal stamp in the upper-right of the tile. */
+.deed-stamp {
+  position: absolute;
+  pointer-events: none;
+  z-index: 6;
+  box-sizing: border-box;
+  aspect-ratio: 1;
+  height: auto;
+  border-radius: 50%;
+  border: calc(var(--board-scale) * 1.5px) solid rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 0 0 calc(var(--board-scale) * 1.5px) rgba(30, 42, 54, 0.35),
+    0 calc(var(--board-scale) * 1px) calc(var(--board-scale) * 3px) rgba(0, 0, 0, 0.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.deed-stamp-ring {
+  position: absolute;
+  inset: 18%;
+  border-radius: 50%;
+  border: calc(var(--board-scale) * 1.5px) solid rgba(255, 255, 255, 0.88);
+  box-shadow: inset 0 0 0 calc(var(--board-scale) * 1px) rgba(0, 0, 0, 0.12);
+  pointer-events: none;
+}
+
+.deed-stamp-label {
+  position: relative;
+  z-index: 1;
+  color: #fff;
+  font-weight: 800;
+  font-size: calc(var(--board-scale) * 11px);
+  line-height: 1;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.45);
 }
 
 /* White upgrade icons on the continent color bar (bottom of property tiles) */
@@ -195,7 +228,7 @@ body {
   justify-content: center;
   gap: calc(var(--board-scale) * 2px);
   pointer-events: none;
-  z-index: 5;
+  z-index: 7;
   box-sizing: border-box;
   padding: 0 calc(var(--board-scale) * 2px);
 }
@@ -580,6 +613,26 @@ body {
 .choice p {
   margin: 0 0 calc(var(--board-scale) * 4px);
   font-size: calc(var(--board-scale) * 13.5px);
+}
+
+.panel.choice.victory {
+  border-color: #c4a35a;
+  background: linear-gradient(
+    160deg,
+    rgba(255, 248, 220, 0.95),
+    rgba(255, 236, 179, 0.88)
+  );
+}
+
+.panel.choice.victory > .label {
+  color: #8a6410;
+  letter-spacing: 0.06em;
+}
+
+.panel.choice.victory > p {
+  font-size: calc(var(--board-scale) * 15px);
+  font-weight: 600;
+  color: #3a2e10;
 }
 
 .hint-one-line {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import boardUrl from "@assets/board-map-v7.png";
-import { BOARD_PNG, tileCenterPercent, tileContinentBarPercent } from "./engine/board";
+import { BOARD_PNG, tileCenterPercent, tileContinentBarPercent, tileRectPercent } from "./engine/board";
 import { CARD_ZH } from "./engine/deck";
 import {
   getAuctionView,
@@ -254,7 +254,7 @@ export default function App() {
                 if (!deed?.ownerId) return null;
                 const owner = state.players.find((x) => x.id === deed.ownerId);
                 if (!owner) return null;
-                const { x, y } = tileCenterPercent(tile);
+                const rect = tileRectPercent(tile);
                 const bar =
                   tile.kind === "property" ? tileContinentBarPercent(tile) : null;
                 const showHouses =
@@ -263,22 +263,39 @@ export default function App() {
                   deed.houses > 0;
                 const showSpecial =
                   tile.kind === "property" && deed.special != null;
+                const stampSize = rect.width * 0.34;
+                const stampLeft = rect.left + rect.width * 0.62;
+                const stampTop = rect.top + rect.height * 0.04;
                 return (
                   <div key={`deed-${tile.index}`}>
+                    {/* Hollow ownership frame: tints the rim only, PNG flag/text stay crisp */}
                     <div
-                      className="deed-mark"
+                      className="deed-wash"
                       title={`${tile.zh} · ${owner.name}`}
                       style={{
-                        left: `${x}%`,
-                        top: `calc(${y}% + ${4 * boardScale}px)`,
+                        left: `${rect.left}%`,
+                        top: `${rect.top}%`,
+                        width: `${rect.width}%`,
+                        height: `${rect.height}%`,
+                        borderColor: owner.color,
+                      }}
+                    />
+                    <div
+                      className="deed-stamp"
+                      title={`${tile.zh} · ${owner.name}`}
+                      style={{
+                        left: `${stampLeft}%`,
+                        top: `${stampTop}%`,
+                        width: `${stampSize}%`,
                         background: owner.color,
                       }}
                     >
-                      {tile.kind === "facility"
-                        ? tile.zh === "石油"
-                          ? "油"
-                          : "矿"
-                        : null}
+                      <span className="deed-stamp-ring" aria-hidden />
+                      {tile.kind === "facility" ? (
+                        <span className="deed-stamp-label">
+                          {tile.zh === "石油" ? "油" : "矿"}
+                        </span>
+                      ) : null}
                     </div>
                     {bar && (showHouses || showSpecial) ? (
                       <div
@@ -496,6 +513,18 @@ export default function App() {
               </ul>
             </div>
             <div className="step-ops">
+          {state.winnerId && (
+            <div className="panel choice victory">
+              <div className="label">胜利</div>
+              <p>
+                恭喜{" "}
+                {state.players.find((p) => p.id === state.winnerId)?.name ??
+                  "玩家"}{" "}
+                —— 获得最终胜利！
+              </p>
+            </div>
+          )}
+
           {state.phase === "initiative" && initiativeActor && (
             <div className="panel choice">
               <div className="label">出发顺序</div>
@@ -645,6 +674,19 @@ export default function App() {
               </div>
               <p>
                 {upgradeTile.zh} · 费用 <Money amount={prompt.cost} />
+                {prompt.mode === "specialize"
+                  ? ` · 第4次=2×地价${upgradeTile.price ?? 0}${
+                      prompt.cost < (upgradeTile.price ?? 0) * 2
+                        ? "−矿山50"
+                        : ""
+                    }`
+                  : prompt.mode === "house"
+                    ? ` · 1×地价${upgradeTile.price ?? 0}${
+                        prompt.cost < (upgradeTile.price ?? 0)
+                          ? "−矿山50"
+                          : ""
+                      }`
+                    : ""}
                 {prompt.mode === "respecialize"
                   ? ` · 现为${
                       state.deeds[upgradeTile.index]?.special === "industry"

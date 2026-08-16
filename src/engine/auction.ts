@@ -222,7 +222,33 @@ export function auctionPlaceBid(
     };
   }
 
+  // Sole remaining bidder (or only eligible from the start) — no rival to raise.
+  const rivals = synced.activeIds.filter((id) => id !== playerId);
+  if (rivals.length === 0) {
+    return {
+      type: "sold",
+      auction: next,
+      buyerId: playerId,
+      salePrice: bid,
+    };
+  }
+
   next = advanceAfterAction(next);
+  const nextActor = currentAuctionActor(next);
+  // Full circle with nobody else left to contest the high bid.
+  if (
+    next.highBidderId &&
+    next.currentBid > 0 &&
+    (nextActor == null || nextActor === next.highBidderId)
+  ) {
+    return {
+      type: "sold",
+      auction: next,
+      buyerId: next.highBidderId,
+      salePrice: next.currentBid,
+    };
+  }
+
   return { type: "continue", auction: next };
 }
 
