@@ -40,6 +40,20 @@ async function rmSafe(p) {
   }
 }
 
+/** Zip with forward-slash paths (itch HTML fails on Windows backslash zips). */
+async function writeZipForward(sourceDir, destZip) {
+  const { readdir } = await import("node:fs/promises");
+  const names = await readdir(sourceDir);
+  if (names.length === 0) throw new Error("staging folder empty");
+  // List entries explicitly so paths are "index.html" not "./index.html".
+  const args = ["-a", "-cf", destZip, ...names];
+  execSync(`tar ${args.map((a) => JSON.stringify(a)).join(" ")}`, {
+    cwd: sourceDir,
+    stdio: "inherit",
+    shell: true,
+  });
+}
+
 console.log("→ npm run build");
 execSync("npm run build", { cwd: root, stdio: "inherit" });
 
@@ -127,17 +141,9 @@ await cp(
 );
 
 await rmSafe(zipPath);
-if (process.platform === "win32") {
-  execSync(
-    `powershell -NoProfile -Command "Compress-Archive -Path '${staging}\\*' -DestinationPath '${zipPath}' -Force"`,
-    { stdio: "inherit" },
-  );
-} else {
-  execSync(
-    `cd "${path.join(root, "release")}" && zip -r vivondo-itch.zip vivondo-itch-staging`,
-    { stdio: "inherit" },
-  );
-}
+// Compress-Archive uses backslash paths and breaks itch HTML embeds.
+// Build a zip with forward-slash entry names and no "./" prefix.
+await writeZipForward(staging, zipPath);
 
 if (await rmSafe(outDir)) {
   await rename(staging, outDir);
